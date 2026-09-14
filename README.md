@@ -19,15 +19,28 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 
 ## 技術スタック
 
-未確定。選定した時点でここに追記し、選定理由は ADR に記録する。
+選定理由はすべて ADR に記録する。
 
 | 領域 | 選定 | ADR |
 | --- | --- | --- |
-| Python 実行基盤 | 未定 | - |
-| エディタコンポーネント | 未定 | - |
-| UI フレームワーク | 未定 | - |
-| ビルドツール | 未定 | - |
-| 拡張機能の形態（Manifest / 表示面） | 未定 | - |
+| 実行形態 | Chrome 拡張機能 | [0001](docs/ADR/0001-implement-as-chrome-extension.md) |
+| Manifest | Manifest V3 | [0001](docs/ADR/0001-implement-as-chrome-extension.md) |
+| 実装言語 | JavaScript（ES Modules）/ HTML / CSS | [0002](docs/ADR/0002-use-vanilla-js-html-css.md) |
+| UI フレームワーク | 採用しない | [0002](docs/ADR/0002-use-vanilla-js-html-css.md) |
+| エディタ基盤 | CodeMirror 6（`@codemirror/lang-python`） | [0003](docs/ADR/0003-use-codemirror6-as-editor.md) |
+| ビルドツール | esbuild（依存の結合とアセットコピーのみ） | [0007](docs/ADR/0007-use-esbuild-as-bundler.md) |
+| Python 実行基盤 | Pyodide（コア + Python 標準ライブラリを同梱） | [0004](docs/ADR/0004-use-pyodide-as-python-runtime.md) |
+| Python の実行コンテキスト | Web Worker（UI スレッドから分離） | [0005](docs/ADR/0005-run-pyodide-in-web-worker.md) |
+| エディタの表示面 | サイドパネル（`chrome.sidePanel`） | [0006](docs/ADR/0006-use-side-panel-as-editor-surface.md) |
+
+### 制約
+
+- Manifest V3 は**リモートコードの読み込み・実行を禁止**する。依存ライブラリは CDN から読まず、すべてバンドルして拡張パッケージに同梱する。
+- 実装そのものは素の JS / HTML / CSS だが、CodeMirror 6 が複数の ES Modules パッケージに分割されているため、**依存の結合を目的としたビルド工程は必要**になる。
+- WebAssembly（Pyodide）の実行には manifest での `'wasm-unsafe-eval'` 宣言が必要。
+- サードパーティの Python パッケージ（numpy 等）は同梱せず、標準ライブラリのみを対象とする。
+- サイドパネル API の都合により、対応ブラウザは **Chrome 114 以降**。
+- サイドパネルは表示幅が狭いため、エディタと出力は縦積みのレイアウトを前提とする。
 
 ## ドキュメント構成
 
@@ -49,6 +62,12 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | # | タイトル | ステータス |
 | --- | --- | --- |
 | [0001](docs/ADR/0001-implement-as-chrome-extension.md) | Chrome 拡張機能として実装する | 採用 |
+| [0002](docs/ADR/0002-use-vanilla-js-html-css.md) | 実装は素の JavaScript / HTML / CSS で行う | 採用 |
+| [0003](docs/ADR/0003-use-codemirror6-as-editor.md) | エディタ基盤に CodeMirror 6 を採用する | 採用 |
+| [0004](docs/ADR/0004-use-pyodide-as-python-runtime.md) | Python 実行基盤に Pyodide を採用する | 採用 |
+| [0005](docs/ADR/0005-run-pyodide-in-web-worker.md) | Pyodide は Web Worker 上で実行する | 採用 |
+| [0006](docs/ADR/0006-use-side-panel-as-editor-surface.md) | エディタの表示面としてサイドパネルを採用する | 採用 |
+| [0007](docs/ADR/0007-use-esbuild-as-bundler.md) | ビルドツールに esbuild を採用する | 採用 |
 
 ## 現在のステータス
 
