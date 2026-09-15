@@ -71,7 +71,7 @@ CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に並べて構�
 
 Pyodide の初期化とユーザコードの実行のみを行う。DOM には触れず、出力はすべて `postMessage` で UI へ送る（[ADR 0005](ADR/0005-run-pyodide-in-web-worker.md)）。標準入力も同じ経路で UI に問い合わせる（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。
 
-同梱する Pyodide は JSPI に対応したバージョン（0.27.7 以降）とし、ユーザコードは `pyodide.runPythonAsync` 経由で実行する。標準入力の読み取りは `pyodide.setStdin()` で差し替える。
+同梱する Pyodide は JSPI に対応したバージョン（実機で確認した **314.0.7** 以降）とし、ユーザコードは `pyodide.runPythonAsync` 経由で実行する。標準入力は `pyodide.setStdin()` ではなく **`builtins.input` の置き換え**で差し替え、応答は `pyodide.ffi.run_sync` で同期的に待つ（[ADR 0016](ADR/0016-replace-builtins-input-instead-of-setstdin.md)）。
 
 Pyodide の実体（`pyodide.asm.wasm`、`python_stdlib.zip` 等）は拡張パッケージ内に同梱されたものをローカルパスから読み込む。CDN からの取得および `micropip` による PyPI からの取得は Manifest V3 が禁止するため行わない（[ADR 0004](ADR/0004-use-pyodide-as-python-runtime.md)）。
 
@@ -102,8 +102,8 @@ Pyodide の初期化は数秒単位のコストがかかるため、エディタ
 
 ユーザコードが `input()` を呼ぶと、実行は**入力待ち**で中断する（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。
 
-1. Worker が `stdin` を UI へ送り、応答が返るまで実行を中断する
-2. UI がステータスを入力待ちに変え、出力領域の末尾にキャレットを立ててフォーカスを移す
+1. Worker が `stdin` を UI へ送り、応答が返るまで実行を中断する。`input(prompt)` のプロンプト文字列はこのメッセージに載せる（[ADR 0016](ADR/0016-replace-builtins-input-instead-of-setstdin.md)）
+2. UI がステータスを入力待ちに変え、プロンプトを出力領域へ書き出し、その末尾にキャレットを立ててフォーカスを移す
 3. ユーザが 1 行入力して確定する
 4. UI が入力をそのまま出力領域へ残し、`stdinResult` で Worker へ返す
 5. Worker が実行を再開し、以降は §3.2 の 3 以降に戻る
@@ -158,7 +158,7 @@ CPython は最初の構文エラーで解析を止めるため、**一度に得�
 | `ready` | なし | Pyodide の初期化完了 |
 | `stdout` | `{ runId, text }` | 標準出力（逐次） |
 | `stderr` | `{ runId, text }` | 標準エラー（逐次） |
-| `stdin` | `{ runId }` | 標準入力の要求。`stdinResult` が返るまで実行を中断する |
+| `stdin` | `{ runId, prompt }` | 標準入力の要求。`prompt` は `input(prompt)` に渡された文字列（既定は空文字）。`stdinResult` が返るまで実行を中断する |
 | `done` | `{ runId }` | 正常終了 |
 | `error` | `{ runId, message, traceback }` | 実行時例外 |
 | `initError` | `{ message }` | Pyodide の初期化失敗 |
@@ -299,4 +299,3 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 決定ではなく、前提の確認として実装時に確かめる。
 
 - タブ切り替え時にサイドパネルの文書が保持されるか（保持されない場合、Pyodide の初期化コストを繰り返し支払うことになる）
-- Worker 上の Pyodide を `runPythonAsync` 経由で実行したとき、JSPI によるスタックスイッチングが期待どおり働くか（ターミナル形式の `input()` の前提。成立しない場合は [ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md) の退避先へ移り、同 ADR を置き換える）
