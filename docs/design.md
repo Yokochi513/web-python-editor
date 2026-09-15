@@ -47,7 +47,7 @@ Service Worker は待機状態が続くと停止されるため、状態を持�
 
 CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に並べて構成する（[ADR 0014](ADR/0014-compose-codemirror-extensions-explicitly.md)）。
 
-**含める** — 行番号（`lineNumbers`）、Python の構文解析とハイライト（`python()` + 自前の `HighlightStyle`）、undo / redo（`history`）、基本キーマップ（`defaultKeymap`）、入力時のデデント（`indentOnInput`）、Tab インデント（`indentWithTab` + スペース 4）、括弧の補完と対応表示（`closeBrackets` / `bracketMatching`）、補完（`autocompletion` + `globalCompletion`）、選択とカーソルの描画（`drawSelection` / `dropCursor` / `highlightSpecialChars`）、構文チェックの表示（`lint`、§3.4）
+**含める** — 行番号（`lineNumbers`）、Python の構文解析とハイライト（`python()` + 自前の `HighlightStyle`）、undo / redo（`history`）、基本キーマップ（`defaultKeymap`）、入力時のデデント（`indentOnInput`）、Tab インデント（`indentWithTab` + スペース 4）、括弧の補完と対応表示（`closeBrackets` / `bracketMatching`）、補完（`autocompletion`。補完ソースは `python()` が登録する `localCompletionSource` と `globalCompletion` に任せる。[ADR 0018](ADR/0018-delegate-completion-sources-to-python-support.md)）、選択とカーソルの描画（`drawSelection` / `dropCursor` / `highlightSpecialChars`）、構文チェックの表示（`lint`、§3.4）
 
 **含めない** — 折りたたみ（ガターをもう 1 列使う）、検索（狭い幅にパネルを重ねる）、現在行の強調と一致強調（配色トークンが未定義）、矩形選択
 
@@ -60,12 +60,14 @@ CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に並べて構�
 | | |
 | --- | --- |
 | 置き場所 | `chrome.storage.local`。レコードは 1 件で、バージョン欄を持つ |
-| 契機 | 入力停止から 500ms のデバウンスを主とし、実行時とパネルを閉じる直前（`pagehide` / `visibilitychange`）のフラッシュを従として併せる |
+| 契機 | 入力停止から 500ms のデバウンスを主とし、実行時と `visibilitychange` で hidden になったときのフラッシュを従として併せる（[ADR 0019](ADR/0019-flush-on-visibilitychange-hidden.md)）。`pagehide` は使わない |
 | 保存するもの | コード、キャレット位置、スクロール位置 |
 | 保存しないもの | **出力領域の内容。** 開き直した時点で Worker は作り直されており、前回の結果だけが残ると現在の出力と誤読されるため |
 | 競合 | 複数ウィンドウで同時に開かれた場合は**後勝ち**。`storage.onChanged` による追従は行わない |
 
 復元は Pyodide の初期化を待たずに行う（§3.1 でエディタは初期化前から編集可能なため）。復元直後の出力領域は常に空になる。
+
+**タブを切り替えてもサイドパネルの文書は破棄されない。** 一方、**パネルを閉じると破棄される**（[ADR 0019](ADR/0019-flush-on-visibilitychange-hidden.md)）。両者は `visibilitychange` の hidden では区別できないため、hidden になるたびにフラッシュする。
 
 ### 2.3 Pyodide Worker
 
@@ -294,8 +296,4 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 
 設計上の未決定事項は現時点でない。新たに生じた場合はここに挙げ、決定した時点で ADR を起こして本ドキュメントへ反映する。
 
-### 実装時に検証が必要な点
-
-決定ではなく、前提の確認として実装時に確かめる。
-
-- タブ切り替え時にサイドパネルの文書が保持されるか（保持されない場合、Pyodide の初期化コストを繰り返し支払うことになる）
+本ドキュメントに挙げていた実装時の検証項目はすべて解消した（[ADR 0016](ADR/0016-replace-builtins-input-instead-of-setstdin.md) / [ADR 0019](ADR/0019-flush-on-visibilitychange-hidden.md)）。モジュール単位で残る未決事項は各モジュールの設計書（[docs/module_design/](module_design/)）に挙げる（[ADR 0017](ADR/0017-limit-adr-scope-to-basic-design.md)）。

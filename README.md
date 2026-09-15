@@ -54,6 +54,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | --- | --- |
 | `docs/design.md` | 基本設計。全体構成をまとめる |
 | `docs/ADR/` | アーキテクチャ決定記録（Architecture Decision Record） |
+| `docs/module_design/` | モジュールごとの設計書。モジュール内部に閉じた決定もここに記録する（[ADR 0017](docs/ADR/0017-limit-adr-scope-to-basic-design.md)） |
 | [Figma: web-python-editor 画面設計](https://www.figma.com/design/g4H9KOklj4zVd8oQMUbb0g) | 画面設計。状態ごとのアートボードと配色トークン（[ADR 0008](docs/ADR/0008-manage-screen-design-in-figma.md)） |
 
 ### ADR の運用
@@ -63,6 +64,8 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 - ファイル名: `NNNN-<英語スラッグ>.md`（連番は 0001 から。欠番は作らない）
 - ステータス: `提案中` / `採用` / `却下` / `置き換え済み（→ NNNN）`
 - 一度採用した ADR は書き換えず、決定を覆す場合は新しい ADR を追加して旧 ADR を `置き換え済み` にする
+- **ADR に記録するのは[基本設計](docs/design.md)の記述を変える決定に限る**（[ADR 0017](docs/ADR/0017-limit-adr-scope-to-basic-design.md)）。判定は「その決定を反映するために `docs/design.md` を書き換える必要があるか」で行う
+- モジュール内部に閉じた決定は、当該モジュールの設計書（`docs/module_design/`）へ直接記録する。迷う場合は ADR 側に倒す
 
 ### ADR 一覧
 
@@ -84,6 +87,9 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0014](docs/ADR/0014-compose-codemirror-extensions-explicitly.md) | CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に構成する | 採用 |
 | [0015](docs/ADR/0015-check-syntax-before-run-in-worker.md) | 構文エラーは実行前に Worker の `compile()` で検出し、エディタ内に表示する | 採用 |
 | [0016](docs/ADR/0016-replace-builtins-input-instead-of-setstdin.md) | 標準入力の差し替えは `setStdin()` ではなく `builtins.input` の置き換えで行う | 採用 |
+| [0017](docs/ADR/0017-limit-adr-scope-to-basic-design.md) | ADR に記録する決定は基本設計を変えるものに限る | 採用 |
+| [0018](docs/ADR/0018-delegate-completion-sources-to-python-support.md) | 補完ソースは `python()` が登録する 2 つに任せる | 採用 |
+| [0019](docs/ADR/0019-flush-on-visibilitychange-hidden.md) | 保存のフラッシュ契機は `visibilitychange` の hidden のみとする | 採用 |
 
 ## 現在のステータス
 
