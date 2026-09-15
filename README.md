@@ -35,7 +35,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | 配色 | ライトテーマのみ | [0009](docs/ADR/0009-use-light-theme-as-base.md) |
 | Python 実行基盤 | Pyodide（コア + Python 標準ライブラリを同梱） | [0004](docs/ADR/0004-use-pyodide-as-python-runtime.md) |
 | Python の実行コンテキスト | Web Worker（UI スレッドから分離） | [0005](docs/ADR/0005-run-pyodide-in-web-worker.md) |
-| 標準入力（`input()`） | ターミナル形式。同期化は JSPI | [0012](docs/ADR/0012-implement-stdin-as-terminal-with-jspi.md) |
+| 標準入力（`input()`） | ターミナル形式。同期化は JSPI。差し替えは `builtins.input` の置き換え | [0012](docs/ADR/0012-implement-stdin-as-terminal-with-jspi.md), [0016](docs/ADR/0016-replace-builtins-input-instead-of-setstdin.md) |
 | コードの永続化 | `chrome.storage.local` に単一バッファで自動保存 | [0013](docs/ADR/0013-persist-code-in-storage-local.md) |
 | エディタの表示面 | サイドパネル（`chrome.sidePanel`） | [0006](docs/ADR/0006-use-side-panel-as-editor-surface.md) |
 
@@ -83,6 +83,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0013](docs/ADR/0013-persist-code-in-storage-local.md) | 編集中のコードは `chrome.storage.local` に単一バッファとして自動保存する | 採用 |
 | [0014](docs/ADR/0014-compose-codemirror-extensions-explicitly.md) | CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に構成する | 採用 |
 | [0015](docs/ADR/0015-check-syntax-before-run-in-worker.md) | 構文エラーは実行前に Worker の `compile()` で検出し、エディタ内に表示する | 採用 |
+| [0016](docs/ADR/0016-replace-builtins-input-instead-of-setstdin.md) | 標準入力の差し替えは `setStdin()` ではなく `builtins.input` の置き換えで行う | 採用 |
 
 ## 現在のステータス
 
