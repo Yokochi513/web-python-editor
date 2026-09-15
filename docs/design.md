@@ -43,9 +43,35 @@ Service Worker は待機状態が続くと停止されるため、状態を持�
 
 エディタ本体。CodeMirror 6 でコードを編集し、Worker へ実行を依頼して結果を表示する。**Python コードをこのスレッドで実行することはない。**
 
+#### エディタの構成
+
+CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に並べて構成する（[ADR 0014](ADR/0014-compose-codemirror-extensions-explicitly.md)）。
+
+**含める** — 行番号（`lineNumbers`）、Python の構文解析とハイライト（`python()` + 自前の `HighlightStyle`）、undo / redo（`history`）、基本キーマップ（`defaultKeymap`）、入力時のデデント（`indentOnInput`）、Tab インデント（`indentWithTab` + スペース 4）、括弧の補完と対応表示（`closeBrackets` / `bracketMatching`）、補完（`autocompletion` + `globalCompletion`）、選択とカーソルの描画（`drawSelection` / `dropCursor` / `highlightSpecialChars`）、構文チェックの表示（`lint`、§3.4）
+
+**含めない** — 折りたたみ（ガターをもう 1 列使う）、検索（狭い幅にパネルを重ねる）、現在行の強調と一致強調（配色トークンが未定義）、矩形選択
+
+**行の折り返しは行わない。** 折り返すと行番号と表示行がずれるため、長い行は横スクロールで扱う。ハイライトの色は Figma の `syntax/*` トークンと 1 対 1 で対応させる（[ADR 0009](ADR/0009-use-light-theme-as-base.md)）。
+
+#### コードの永続化
+
+パネルを閉じると文書は破棄されるため、編集中のコードは `chrome.storage.local` へ**単一のレコードとして自動保存**する（[ADR 0013](ADR/0013-persist-code-in-storage-local.md)）。
+
+| | |
+| --- | --- |
+| 置き場所 | `chrome.storage.local`。レコードは 1 件で、バージョン欄を持つ |
+| 契機 | 入力停止から 500ms のデバウンスを主とし、実行時とパネルを閉じる直前（`pagehide` / `visibilitychange`）のフラッシュを従として併せる |
+| 保存するもの | コード、キャレット位置、スクロール位置 |
+| 保存しないもの | **出力領域の内容。** 開き直した時点で Worker は作り直されており、前回の結果だけが残ると現在の出力と誤読されるため |
+| 競合 | 複数ウィンドウで同時に開かれた場合は**後勝ち**。`storage.onChanged` による追従は行わない |
+
+復元は Pyodide の初期化を待たずに行う（§3.1 でエディタは初期化前から編集可能なため）。復元直後の出力領域は常に空になる。
+
 ### 2.3 Pyodide Worker
 
-Pyodide の初期化とユーザコードの実行のみを行う。DOM には触れず、出力はすべて `postMessage` で UI へ送る（[ADR 0005](ADR/0005-run-pyodide-in-web-worker.md)）。
+Pyodide の初期化とユーザコードの実行のみを行う。DOM には触れず、出力はすべて `postMessage` で UI へ送る（[ADR 0005](ADR/0005-run-pyodide-in-web-worker.md)）。標準入力も同じ経路で UI に問い合わせる（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。
+
+同梱する Pyodide は JSPI に対応したバージョン（0.27.7 以降）とし、ユーザコードは `pyodide.runPythonAsync` 経由で実行する。標準入力の読み取りは `pyodide.setStdin()` で差し替える。
 
 Pyodide の実体（`pyodide.asm.wasm`、`python_stdlib.zip` 等）は拡張パッケージ内に同梱されたものをローカルパスから読み込む。CDN からの取得および `micropip` による PyPI からの取得は Manifest V3 が禁止するため行わない（[ADR 0004](ADR/0004-use-pyodide-as-python-runtime.md)）。
 
@@ -72,6 +98,20 @@ Pyodide の初期化は数秒単位のコストがかかるため、エディタ
 
 出力をまとめて送らないのは、長時間実行中に画面が無反応に見える状態を避けるためである（[ADR 0005](ADR/0005-run-pyodide-in-web-worker.md)）。
 
+#### 入力待ち
+
+ユーザコードが `input()` を呼ぶと、実行は**入力待ち**で中断する（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。
+
+1. Worker が `stdin` を UI へ送り、応答が返るまで実行を中断する
+2. UI がステータスを入力待ちに変え、出力領域の末尾にキャレットを立ててフォーカスを移す
+3. ユーザが 1 行入力して確定する
+4. UI が入力をそのまま出力領域へ残し、`stdinResult` で Worker へ返す
+5. Worker が実行を再開し、以降は §3.2 の 3 以降に戻る
+
+Worker は JSPI のスタックスイッチングによって待つ。**スレッドを止めるわけではない**ため、待機中も Worker のメッセージ受信は生きており、応答は通常の `postMessage` で渡せる。この経路を成立させるため、ユーザコードの実行は `pyodide.runPythonAsync` を通す。
+
+入力待ちの間も停止ボタンは有効で、`terminate()` は通常どおり効く（§3.3）。
+
 ### 3.3 停止
 
 Pyodide はシングルスレッドで動作するため、実行中のユーザコードへ「中断」を伝える手段がない。停止は **Worker の破棄**で実現する。
@@ -84,6 +124,21 @@ Pyodide はシングルスレッドで動作するため、実行中のユーザ
 
 停止直後に次の実行を待たせないよう、Worker の作り直しは停止処理の一部として行う。
 
+### 3.4 構文チェック
+
+実行とは独立に、**実行する前**に構文エラーを検出する（[ADR 0015](ADR/0015-check-syntax-before-run-in-worker.md)）。
+
+1. 入力が止まってから 500ms 後、UI が `check` でコードを Worker へ送る（コードの保存と同じ契機、§2.2）
+2. Worker が `compile(code, "<editor>", "exec")` を呼ぶ。**ユーザコードは実行しない**
+3. Worker が `checkResult` で診断を返す
+4. UI がエディタ内に下線とツールチップで表示する
+
+CPython は最初の構文エラーで解析を止めるため、**一度に得られる診断は最大 1 件**である。
+
+検査を行わないのは次の場合。Pyodide の**初期化完了前**、および**実行中・入力待ちの間**（§3.2）。その間、既に表示されている下線は消さずに残す。消すと直ったと読めてしまうため。
+
+構文エラーがあっても**実行ボタンは無効にしない**。検査結果は遅れて届くため、連動させるとボタンの活性が入力の合間に揺れる（[ADR 0010](ADR/0010-show-run-state-in-toolbar-status.md)）。
+
 ## 4. UI ↔ Worker メッセージ仕様
 
 停止は `terminate()` で行うため、停止要求のメッセージは存在しない。
@@ -93,6 +148,8 @@ Pyodide はシングルスレッドで動作するため、実行中のユーザ
 | type | ペイロード | 意味 |
 | --- | --- | --- |
 | `run` | `{ runId, code }` | コードの実行要求 |
+| `stdinResult` | `{ runId, text }` | `stdin` への応答（確定した 1 行） |
+| `check` | `{ checkId, code }` | 構文チェックの要求（実行は伴わない） |
 
 ### Worker → UI
 
@@ -101,9 +158,11 @@ Pyodide はシングルスレッドで動作するため、実行中のユーザ
 | `ready` | なし | Pyodide の初期化完了 |
 | `stdout` | `{ runId, text }` | 標準出力（逐次） |
 | `stderr` | `{ runId, text }` | 標準エラー（逐次） |
+| `stdin` | `{ runId }` | 標準入力の要求。`stdinResult` が返るまで実行を中断する |
 | `done` | `{ runId }` | 正常終了 |
 | `error` | `{ runId, message, traceback }` | 実行時例外 |
 | `initError` | `{ message }` | Pyodide の初期化失敗 |
+| `checkResult` | `{ checkId, diagnostics }` | 構文チェックの結果。`diagnostics` は最大 1 件 |
 
 `runId` は実行ごとの識別子。Worker を破棄せず連続実行した場合に、遅れて届いた出力を破棄済みの実行のものと判別するために用いる。
 
@@ -112,20 +171,55 @@ Pyodide はシングルスレッドで動作するため、実行中のユーザ
 サイドパネルは表示幅が狭いため、**要素は縦に積む**（[ADR 0006](ADR/0006-use-side-panel-as-editor-surface.md)）。
 
 ```
-┌─────────────────────────┐
-│ ツールバー  [実行] [停止] │
-├─────────────────────────┤
-│                         │
-│   エディタ               │
-│   (CodeMirror 6)        │
-│                         │
-├─────────────────────────┤
-│   出力領域               │
-│   stdout / stderr       │
-└─────────────────────────┘
+┌─────────────────────────────┐
+│ ● 準備完了      [実行] [停止] │  ツールバー 44px
+├─────────────────────────────┤
+│ 1  import math              │
+│ 2                           │
+│ 3  def area(r):             │  エディタ (CodeMirror 6)
+│ 4      return math.pi*r**2  │  残りの高さをすべて使う
+│                             │
+├─────────────────────────────┤
+│ 出力                 クリア  │
+│ 1 半径は? 3                 │  出力領域 220px
+│ 2 28.274333882308138        │  stdout / stderr / エラー / 入力
+│ 3 半径は? ▌                 │  入力待ちのキャレット
+└─────────────────────────────┘
 ```
 
 VS Code のようなサイドバーとエディタの横並び構成は幅の制約から成立しない。ファイルツリーのような常時表示の横並び UI は設計に含めない。
+
+### 5.1 ツールバー
+
+左端に**実行状態のインジケータとラベル**、右端に実行 / 停止ボタンを置く（[ADR 0010](ADR/0010-show-run-state-in-toolbar-status.md)）。状態はステータス表示が説明し、ボタンの活性がその時点で可能な操作を示す。入力待ち（§3.2）もこのステータスで示す状態のひとつで、実行中と同じくボタンの活性は停止のみとなる。
+
+### 5.2 出力領域
+
+stdout / stderr / エラーを**届いた順に追記**する。種別ごとのタブや領域は設けない。実行時例外（`error`）と初期化失敗（`initError`）はダイアログやトーストを使わず、この領域にインラインで表示する（[ADR 0011](ADR/0011-show-errors-inline-in-output-pane.md)）。
+
+ここに出るのは**実行して得られた結果**に限る。実行前に分かる構文エラーはエディタ内に表示し（§3.4）、この領域には出さない。
+
+この領域は**入力面も兼ねる**（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。`stdin` を受け取ると末尾にキャレットが立ってフォーカスを受け取り、確定した入力はそのまま同じ流れに残る。入力用の欄を別に設けないのは、プロンプト・入力・その結果の前後関係を 1 本の履歴として読めるようにするためで、追記の原則はここでも変わらない。
+
+### 5.3 画面設計ファイル
+
+具体的な寸法・配色・状態ごとの見た目は Figma で管理する（[ADR 0008](ADR/0008-manage-screen-design-in-figma.md)）。配色はライトテーマのみを定義する（[ADR 0009](ADR/0009-use-light-theme-as-base.md)）。
+
+**[Figma: web-python-editor 画面設計](https://www.figma.com/design/g4H9KOklj4zVd8oQMUbb0g)**
+
+アートボードは [§3](#3-実行フロー) の実行フローおよび [§4](#4-ui--worker-メッセージ仕様) のメッセージと対応する。
+
+| アートボード | 状態 | 契機 |
+| --- | --- | --- |
+| 01 初期化中 | 実行・停止ともに無効。編集は可能 | パネルを開いた直後（§3.1） |
+| 02 実行可能 | 実行のみ有効 | `ready` |
+| 03 実行中 | 停止のみ有効。出力を逐次追記 | `run` 送信後（§3.2） |
+| 04 正常終了 | 実行のみ有効。出力は残す | `done` |
+| 05 実行時エラー | 実行のみ有効。traceback を表示 | `error` |
+| 06 初期化失敗 | 実行・停止ともに無効。再試行を提示 | `initError` |
+| 07 停止直後 | 実行・停止ともに無効。再初期化を待つ | 停止ボタン（§3.3） |
+| 08 入力待ち | 停止のみ有効。出力領域の末尾にキャレット | `stdin` |
+| 09 構文エラー | 実行のみ有効。エディタ内に下線とツールチップ | `checkResult`（§3.4） |
 
 ## 6. ディレクトリ構成
 
@@ -179,7 +273,7 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 ```json
 {
   "manifest_version": 3,
-  "minimum_chrome_version": "114",
+  "minimum_chrome_version": "137",
   "permissions": ["sidePanel", "storage"],
   "side_panel": { "default_path": "sidepanel/sidepanel.html" },
   "background": {
@@ -193,22 +287,16 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 ```
 
 - `'wasm-unsafe-eval'` は Pyodide の WebAssembly 実行に必須（[ADR 0004](ADR/0004-use-pyodide-as-python-runtime.md)）
-- `minimum_chrome_version: 114` は `chrome.sidePanel` API の要件（[ADR 0006](ADR/0006-use-side-panel-as-editor-surface.md)）
-- `storage` 権限は編集中コードの永続化に用いる（§9 の未決定事項）
+- `minimum_chrome_version: 137` は JSPI の要件（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。`chrome.sidePanel` API の要件は 114 だが（[ADR 0006](ADR/0006-use-side-panel-as-editor-surface.md)）、下限を決めるのは JSPI の側になる
+- `storage` 権限は編集中コードの永続化に用いる（§2.2 / [ADR 0013](ADR/0013-persist-code-in-storage-local.md)）
 
 ## 9. 未決定事項
 
-以下は本設計では確定させない。決定した時点で ADR を起こし、本ドキュメントへ反映する。
-
-| 項目 | 論点 | 由来 |
-| --- | --- | --- |
-| コードの永続化方式 | `chrome.storage` への保存粒度とタイミング。パネルを閉じると編集中コードが失われるため対応が必要 | [ADR 0006](ADR/0006-use-side-panel-as-editor-surface.md) |
-| `input()` の扱い | Python 側は同期的に待つが Worker → UI の問い合わせは非同期。`SharedArrayBuffer` + `Atomics.wait` と cross-origin isolation が必要。非対応とする選択肢もある | [ADR 0005](ADR/0005-run-pyodide-in-web-worker.md) |
-| CodeMirror 6 の構成範囲 | 補完・検索・折りたたみ・キーバインドのどこまでを組み込むか。サイドパネルの幅の制約も判断材料になる | [ADR 0003](ADR/0003-use-codemirror6-as-editor.md) |
+設計上の未決定事項は現時点でない。新たに生じた場合はここに挙げ、決定した時点で ADR を起こして本ドキュメントへ反映する。
 
 ### 実装時に検証が必要な点
 
 決定ではなく、前提の確認として実装時に確かめる。
 
 - タブ切り替え時にサイドパネルの文書が保持されるか（保持されない場合、Pyodide の初期化コストを繰り返し支払うことになる）
-- 拡張の manifest で `cross_origin_embedder_policy` / `cross_origin_opener_policy` を指定して cross-origin isolation を有効化できるか（`input()` 対応の前提）
+- Worker 上の Pyodide を `runPythonAsync` 経由で実行したとき、JSPI によるスタックスイッチングが期待どおり働くか（ターミナル形式の `input()` の前提。成立しない場合は [ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md) の退避先へ移り、同 ADR を置き換える）
