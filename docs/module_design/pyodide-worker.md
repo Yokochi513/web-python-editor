@@ -24,6 +24,7 @@ Pyodide の実体は拡張パッケージ内に同梱したものをローカル
 | ------ | ---- | ------ | ---- |
 | `init` | なし | `Promise<void>` | Pyodide を初期化し、`ready` または `initError` を送る |
 | `installInput` | `pyodide` | `void` | `builtins.input` を UI へ問い合わせる実装へ差し替える |
+| `installCheck` | `pyodide` | `void` | 構文検査を行う Python 側のヘルパを定義する |
 | `handleMessage` | `event` | `void` | UI からのメッセージを種別ごとに振り分ける |
 | `handleRun` | `payload` | `Promise<void>` | ユーザコードを実行し、`done` または `error` を送る |
 | `handleCheck` | `payload` | `void` | `compile()` で構文を検査し、`checkResult` を送る |
@@ -74,10 +75,10 @@ async function init(): Promise<void>
 
 - フロー
 
-1. `loadPyodide({ indexURL })` を呼ぶ。`indexURL` は `new URL("../vendor/pyodide/", import.meta.url)` で解決する
+1. `loadPyodide({ indexURL })` を呼ぶ。`indexURL` は `new URL("../pyodide/", import.meta.url)` で解決する（[ADR 0027](../ADR/0027-copy-pyodide-from-node-modules-at-build-time.md)）
 2. `pyodide.setStdout({ batched: (text) => post(STDOUT, { runId: currentRunId, text }) })` を設定する
 3. `pyodide.setStderr({ ... })` を同様に設定する
-4. `installInput(pyodide)` を呼ぶ
+4. `installInput(pyodide)` と `installCheck(pyodide)` を呼ぶ
 5. `await pyodide.runPythonAsync("pass")` で暖機する（[ADR 0025](../ADR/0025-warm-up-python-before-ready.md)）
 6. モジュール変数 `pyodide` へ代入する
 7. `ready` を送る
@@ -98,10 +99,10 @@ dist/
 ├── background/service-worker.js
 ├── sidepanel/{sidepanel.html, main.js, style.css}
 ├── worker/pyodide-worker.js
-└── vendor/pyodide/
+└── pyodide/
 ```
 
-Worker は `dist/worker/` に置かれるため、`vendor/pyodide/` は 1 段上になる。
+Worker は `dist/worker/` に置かれるため、`pyodide/` は 1 段上になる。
 
 - 例外処理
 
@@ -152,18 +153,62 @@ import js
 def _input(prompt=""):
     sys.stdout.flush()
     line = run_sync(js.askLine(str(prompt)))
-    if line is None:
+    if not isinstance(line, str):
         raise EOFError("EOF when reading a line")
     return line
 
 builtins.input = _input
 ```
 
-`line is None` は EOF を表す（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）。UI が `stdinResult` の `text` に `null` を載せて返したときに起こる。メッセージ文言を CPython と同じにするのは、ユーザが手元の Python で見るものと揃えるためである。
+**EOF の判定に `line is None` を使わない。** Pyodide は JS の `null` を Python の `None` ではなく `jsnull` へ写すため、`is None` が成立せず `input()` がその sentinel をそのまま返す。実装時の実機テストで判明した。1 行が返らなかったことを EOF とみなす形にすれば、変換の仕様に依存せずに済む。
+
+EOF は UI が `stdinResult` の `text` に `null` を載せて返したときに起こる（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）。メッセージ文言を CPython と同じにするのは、ユーザが手元の Python で見るものと揃えるためである。
 
 `sys.stdout.flush()` は、`print("名前: ", end="")` のように**改行を伴わないプロンプト**を入力待ちの前に出し切るために要る。`batched` は行単位で呼ばれるため、flush しないと問いかけが画面に出ないまま入力待ちになる。
 
 **プロンプトを `print` で標準出力へ流さない。** プロンプト文字列は `askLine` に渡され、`stdin` メッセージのペイロードとして UI へ届く（[ADR 0016](../ADR/0016-replace-builtins-input-instead-of-setstdin.md)）。UI 側は 1 回の受信でプロンプトの表示とキャレットの設置をまとめて処理できる。
+
+- 例外処理
+
+行わない。ここでの失敗は初期化の失敗であり、`init` の `try` が受けて `initError` になる。
+
+### installCheck関数
+
+- シグネチャ
+```js
+function installCheck(pyodide: PyodideInterface): void
+```
+
+- 概要
+
+`handleCheck` が呼ぶ Python 側のヘルパ `_check_syntax(code)` を定義する。初期化時に 1 回だけ行う。
+
+**ヘルパを置くのは、`SyntaxError` の属性が JS へ渡らないためである。** Pyodide の `PythonError` が持つのは `type` と整形済みの traceback だけで、`lineno` / `offset` は失われる。例外として投げさせず、`SyntaxError` オブジェクトそのものを返させれば、JS 側は返った `PyProxy` から属性を読める。
+
+```python
+def _check_syntax(code):
+    try:
+        compile(code, "<editor>", "exec")
+    except SyntaxError as e:
+        return e
+    except Exception:
+        return None
+    return None
+```
+
+`SyntaxError` 以外を `None` に落とすのは、検査の失敗を実行時エラーとして扱わないためである（`handleCheck` の「例外処理」）。
+
+- 引数一覧
+
+| 引数名 | 型  | 必須 | 内容 |
+| ------ | --- | ---- | ---- |
+| `pyodide` | `PyodideInterface` | ○ | 初期化済みのインスタンス |
+
+- 返り値一覧
+
+| 返り値名 | 型  | 内容 |
+| -------- | --- | ---- |
+| （なし） | `void` | |
 
 - 例外処理
 
@@ -302,9 +347,10 @@ CPython は最初の構文エラーで解析を止めるため、**一度に得�
 
 - フロー
 
-1. Python 側で `compile(code, "<editor>", "exec")` を呼ぶ
-2. 例外が出なければ `checkResult` に `{ checkId, diagnostics: [] }` を載せて送る
-3. `SyntaxError` が出れば `toDiagnostics(err, code)` で診断へ変換し、`{ checkId, diagnostics }` を送る
+1. `pyodide.globals.get("_check_syntax")` でヘルパを取り、`code` を渡して呼ぶ（`installCheck` 参照）
+2. `undefined` が返れば `checkResult` に `{ checkId, diagnostics: [] }` を載せて送る
+3. `SyntaxError` が返れば `toDiagnostics(err)` で診断へ変換し、`{ checkId, diagnostics }` を送る
+4. 取り出した `PyProxy` は `destroy()` する
 
 同期処理として扱う。`compile()` はユーザコードを実行しないため、待ちが発生しない。
 
@@ -443,7 +489,7 @@ ZeroDivisionError: division by zero
 
 - シグネチャ
 ```js
-function toDiagnostics(err: PythonError): SyntaxDiagnostic[]
+function toDiagnostics(err: PyProxy): SyntaxDiagnostic[]
 ```
 
 - 概要
@@ -458,7 +504,7 @@ Worker 側で `Diagnostic` を組み立てれば変換は完結するが、**Wor
 
 | 引数名 | 型  | 必須 | 内容 |
 | ------ | --- | ---- | ---- |
-| `err` | `PythonError` | ○ | `compile()` が投げた `SyntaxError` |
+| `err` | `PyProxy` | ○ | `_check_syntax` が返した `SyntaxError`。属性は `PyProxy` 越しに読む |
 
 - 返り値一覧
 
