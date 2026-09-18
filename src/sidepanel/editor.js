@@ -6,9 +6,11 @@
 // EditorView / EditorState / Transaction といった CodeMirror の語彙が漏れる範囲を
 // 本モジュールに閉じる（ADR 0014）。
 
-import { Annotation, EditorState } from "@codemirror/state";
+import { Annotation, EditorState, RangeSetBuilder } from "@codemirror/state";
 import {
+  Decoration,
   EditorView,
+  ViewPlugin,
   drawSelection,
   dropCursor,
   highlightSpecialChars,
@@ -53,6 +55,136 @@ export const pythonHighlightStyle = HighlightStyle.define([
   { tag: [t.comment, t.lineComment], color: "#a0a1a7" },
 ]);
 
+// ---------------------------------------------------------------- インデントガイド
+//
+// 深さごとに色が変わる縦線を引く（ADR 0029）。色は Figma の indent/1〜4 に
+// 対応する CSS カスタムプロパティをそのまま参照し、JS 側に値を持たない
+// （ADR 0008 の「値の二重管理を避ける」）。
+
+const INDENT_COLOR_COUNT = 4;
+
+// 空行の深さを前後から決めるときに遡る行数の上限。文書全体を舐めると、
+// 空行が続く長い文書で行あたりの計算が効かなくなる。
+const BLANK_SCAN_LIMIT = 200;
+
+/** 行頭の空白を桁数で数える。タブは次のインデント位置まで進める。 */
+function indentColumns(text, unit) {
+  let column = 0;
+  for (const ch of text) {
+    if (ch === " ") column += 1;
+    else if (ch === "\t") column += unit - (column % unit);
+    else break;
+  }
+  return column;
+}
+
+function isBlank(text) {
+  return text.trim() === "";
+}
+
+/**
+ * 空行は前後の非空行のうち**浅い方**に合わせる。深い方に合わせると、ブロックが
+ * 終わった後の空行にまで線が伸びる。
+ */
+function indentDepth(doc, lineNumber, unit) {
+  const line = doc.line(lineNumber);
+  if (!isBlank(line.text)) return Math.floor(indentColumns(line.text, unit) / unit);
+
+  let before = 0;
+  for (let i = lineNumber - 1; i >= 1 && lineNumber - i <= BLANK_SCAN_LIMIT; i--) {
+    const text = doc.line(i).text;
+    if (isBlank(text)) continue;
+    before = Math.floor(indentColumns(text, unit) / unit);
+    break;
+  }
+
+  let after = 0;
+  for (let i = lineNumber + 1; i <= doc.lines && i - lineNumber <= BLANK_SCAN_LIMIT; i++) {
+    const text = doc.line(i).text;
+    if (isBlank(text)) continue;
+    after = Math.floor(indentColumns(text, unit) / unit);
+    break;
+  }
+
+  return Math.min(before, after);
+}
+
+/**
+ * 深さ分の縦線を行の背景として組み立てる。1 段につき 1px の線を 1 枚重ねる。
+ * 位置は文字の原点から測るため、`.cm-line` の左パディングを 0 にしてある
+ * （style.css）。
+ */
+function guideStyle(depth, unitWidth) {
+  const images = [];
+  const sizes = [];
+  const positions = [];
+
+  for (let level = 0; level < depth; level++) {
+    const color = `var(--indent-${(level % INDENT_COLOR_COUNT) + 1})`;
+    images.push(`linear-gradient(${color}, ${color})`);
+    sizes.push("1px 100%");
+    positions.push(`${(level * unitWidth).toFixed(2)}px 0`);
+  }
+
+  return [
+    `background-image:${images.join(",")}`,
+    `background-size:${sizes.join(",")}`,
+    `background-position:${positions.join(",")}`,
+    "background-repeat:no-repeat",
+  ].join(";");
+}
+
+function buildIndentGuides(view) {
+  const unit = view.state.facet(indentUnit).length || 4;
+  const unitWidth = view.defaultCharacterWidth * unit;
+  const builder = new RangeSetBuilder();
+  const cache = new Map();
+  let lastLine = 0;
+
+  for (const { from, to } of view.visibleRanges) {
+    let pos = from;
+    while (pos <= to) {
+      const line = view.state.doc.lineAt(pos);
+      // 可視範囲が隣り合うと同じ行を 2 度見ることがある
+      if (line.number <= lastLine) {
+        pos = line.to + 1;
+        continue;
+      }
+      lastLine = line.number;
+
+      const depth = indentDepth(view.state.doc, line.number, unit);
+      if (depth > 0) {
+        let deco = cache.get(depth);
+        if (deco === undefined) {
+          deco = Decoration.line({ attributes: { style: guideStyle(depth, unitWidth) } });
+          cache.set(depth, deco);
+        }
+        builder.add(line.from, line.from, deco);
+      }
+      pos = line.to + 1;
+    }
+  }
+
+  return builder.finish();
+}
+
+const indentGuides = ViewPlugin.fromClass(
+  class {
+    constructor(view) {
+      this.decorations = buildIndentGuides(view);
+    }
+
+    update(update) {
+      // geometryChanged を見るのは、フォントの読み込みで 1 文字の幅が変わると
+      // 線の位置がずれるため。
+      if (update.docChanged || update.viewportChanged || update.geometryChanged) {
+        this.decorations = buildIndentGuides(update.view);
+      }
+    }
+  },
+  { decorations: (plugin) => plugin.decorations },
+);
+
 /**
  * 有効にする拡張を明示的に並べた配列を返す（ADR 0014）。basicSetup は使わない。
  * **この関数の中身が「どの機能を持つエディタか」の定義そのもの**になる。
@@ -81,6 +213,8 @@ export function buildExtensions(options = {}) {
     keymap.of(defaultKeymap),
     indentOnInput(),
     indentUnit.of("    "),
+    // 深さごとに色が変わる縦線（ADR 0029）
+    indentGuides,
     // Tab は補完の確定を先に試す。completionKeymap が割り当てているのは Enter
     // だけで Tab は素通しになり、補完を選んでいる最中の Tab が indentWithTab に
     // 拾われてインデントが入ってしまう。acceptCompletion は補完が出ていなければ

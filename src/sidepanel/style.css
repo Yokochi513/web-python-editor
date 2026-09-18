@@ -109,6 +109,13 @@
 
   --gutter-text: #b3b9c2;
 
+  /* インデントガイドの縦線。深さごとに巡回する（ADR 0029）。syntax/* の色相を
+     引き継ぎつつ、文字より十分に淡くして地の装飾に留める。 */
+  --indent-1: #a9c3f2;
+  --indent-2: #9fc99e;
+  --indent-3: #dcbd85;
+  --indent-4: #cfa8ce;
+
   /* syntax/* は editor.js の pythonHighlightStyle が持つ。CodeMirror の
      HighlightStyle は CSS ではなく JS 側で色を受け取るため、ここには置かない。 */
 
@@ -278,6 +285,15 @@ body[data-state="initError"] .status-dot {
 
 .cm-content {
   padding: 10px var(--space-3) 10px 10px;
+}
+
+/*
+ * 行の左パディングを外す。CodeMirror の既定は 6px だが、インデントガイドは行の
+ * 背景として描くため（editor.js）、背景の原点と文字の原点がずれていると線が
+ * 桁に乗らない。キャレットの余地は .cm-content 側の padding が持つ。
+ */
+.cm-line {
+  padding-left: 0;
 }
 
 .cm-gutters {

@@ -47,7 +47,7 @@ Service Worker は待機状態が続くと停止されるため、状態を持�
 
 CodeMirror 6 は `basicSetup` を使わず、拡張を明示的に並べて構成する（[ADR 0014](ADR/0014-compose-codemirror-extensions-explicitly.md)）。
 
-**含める** — 行番号（`lineNumbers`）、Python の構文解析とハイライト（`python()` + 自前の `HighlightStyle`）、undo / redo（`history`）、基本キーマップ（`defaultKeymap`）、入力時のデデント（`indentOnInput`）、Tab インデント（`indentWithTab` + スペース 4）、括弧の補完と対応表示（`closeBrackets` / `bracketMatching`）、補完（`autocompletion`。補完ソースは `python()` が登録する `localCompletionSource` と `globalCompletion` に任せる。[ADR 0018](ADR/0018-delegate-completion-sources-to-python-support.md)）、選択とカーソルの描画（`drawSelection` / `dropCursor` / `highlightSpecialChars`）、構文チェックの表示（`lint`、§3.4）
+**含める** — 行番号（`lineNumbers`）、Python の構文解析とハイライト（`python()` + 自前の `HighlightStyle`）、undo / redo（`history`）、基本キーマップ（`defaultKeymap`）、入力時のデデント（`indentOnInput`）、Tab インデント（`indentWithTab` + スペース 4）、括弧の補完と対応表示（`closeBrackets` / `bracketMatching`）、補完（`autocompletion`。補完ソースは `python()` が登録する `localCompletionSource` と `globalCompletion` に任せる。[ADR 0018](ADR/0018-delegate-completion-sources-to-python-support.md)）、選択とカーソルの描画（`drawSelection` / `dropCursor` / `highlightSpecialChars`）、構文チェックの表示（`lint`、§3.4）、インデントガイド（深さごとに色が変わる縦線。[ADR 0029](ADR/0029-show-indent-depth-with-colored-guides.md)）
 
 **含めない** — 折りたたみ（ガターをもう 1 列使う）、検索（狭い幅にパネルを重ねる）、現在行の強調と一致強調（配色トークンが未定義）、矩形選択
 

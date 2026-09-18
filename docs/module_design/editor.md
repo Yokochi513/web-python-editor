@@ -123,6 +123,7 @@ function buildExtensions(options: { onDocChanged?: () => void }): Extension[]
 | `autocompletion()` | 補完。ソースは `python()` が登録する `localCompletionSource` と `globalCompletion` に任せ、`override` は使わない（[ADR 0018](../ADR/0018-delegate-completion-sources-to-python-support.md)） |
 | `drawSelection()` / `dropCursor()` / `highlightSpecialChars()` | 選択とカーソルの描画 |
 | `lint` の状態フィールド（`lintGutter` は伴わない） | 構文チェックの表示（[§3.4](../design.md)。`showDiagnostics` から差し込む） |
+| `indentGuides`（自前の `ViewPlugin`） | インデント 1 段ごとに 1px の縦線を引き、段ごとに色を変える（[ADR 0029](../ADR/0029-show-indent-depth-with-colored-guides.md)）。色は Figma の `indent/1`〜`indent/4` を巡回し、値は `var(--indent-1)` として CSS から参照する |
 | `EditorView.updateListener.of(...)` | `onDocChanged` の呼び出し |
 
 含めないもの。折りたたみ（ガターをもう 1 列使う）、検索（狭い幅にパネルを重ねる）、現在行の強調と一致強調（配色トークンが未定義）、矩形選択。
@@ -271,6 +272,24 @@ const restoreAnnotation = Annotation.define();
 - 例外処理
 
 `state.caret` が文書長を超える場合は例外とせず、文書末尾へ丸める。保存時と復元時でコードが一致しない状況——複数ウィンドウで同時に開いた場合の**後勝ち**（[ADR 0013](../ADR/0013-persist-code-in-storage-local.md)）——が正常な経路として存在するため、位置の食い違いは異常ではない。
+
+### インデントガイド
+
+`buildExtensions` が組み込む `ViewPlugin`（[ADR 0029](../ADR/0029-show-indent-depth-with-colored-guides.md)）。公開関数ではないため関数一覧には載せない。
+
+行ごとに深さを求め、`Decoration.line` で背景として 1px の縦線を段の数だけ重ねる。位置は `view.defaultCharacterWidth` とインデント幅（スペース 4）から求める。
+
+**色の値を JS に持たない。** `linear-gradient(var(--indent-1), var(--indent-1))` の形で CSS カスタムプロパティを参照し、Figma から写した値の置き場を `style.css` 1 箇所に保つ（[ADR 0008](../ADR/0008-manage-screen-design-in-figma.md)）。
+
+決めた点が 3 つある。
+
+| 論点 | 決定 | 理由 |
+| --- | --- | --- |
+| 空行の深さ | 前後の非空行のうち**浅い方** | 深い方に合わせると、ブロックが終わった後の空行にまで線が伸びる |
+| 空行を探す範囲 | 前後 200 行まで | 文書全体を舐めると、空行が続く長い文書で行あたりの計算が効かなくなる |
+| 再計算の契機 | `docChanged` / `viewportChanged` / `geometryChanged` | フォントの読み込みで 1 文字の幅が変わると線の位置がずれるため、`geometryChanged` も見る |
+
+**`.cm-line` の左パディングを 0 にする必要がある。** CodeMirror の既定は 6px で、背景の原点と文字の原点がずれていると線が桁に乗らない（`style.css`）。
 
 ### showDiagnostics関数
 
