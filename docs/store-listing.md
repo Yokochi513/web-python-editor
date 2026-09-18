@@ -82,9 +82,23 @@ Chrome 137 以降。標準入力の実装に JSPI（JavaScript Promise Integrati
 
 3 つの宣言（データの売却なし / 承認された用途以外に使用しない / 信用調査目的で使用しない）にはいずれも同意できる。
 
+## スクリーンショット
+
+[`store/screenshot-1280x800.png`](store/screenshot-1280x800.png)（1280x800、RGB、アルファなし、97KB）。
+
+素材は 2 つある。
+
+| もの | 置き場所 |
+| --- | --- |
+| 実機で撮ったサイドパネルの画像 | [`store/panel-capture.png`](store/panel-capture.png) |
+| 組み版 | Figma の「Store screenshot 1280x800」フレーム |
+
+**作り直す手順。** 実機の画像を Figma のフレーム内「Panel capture」へ流し込み、フレームを PNG で書き出す。書き出しは RGBA になるため、**アルファを落として RGB にする**（ストアは 24-bit PNG を求める）。透明な画素が無いことを確かめてから落とせば、見た目は変わらない。
+
+Chrome のサイドパネルのヘッダーごと写っているものを使っている。「サイドパネルで動く」ことが画像だけで伝わるためである。
+
 ## まだ用意していないもの
 
-- **スクリーンショット**（1280x800 または 640x400、最低 1 枚）。実際に動いている画面を撮るのが最も正確なので、実機の画像が要る。
 - **プロモーション画像**（任意）。
 - Chrome ウェブストアのデベロッパー登録（初回のみ登録料が必要）。
 
@@ -94,7 +108,7 @@ Chrome 137 以降。標準入力の実装に JSPI（JavaScript Promise Integrati
 2. `npm run package` — `release/web-python-editor-<version>.zip` を作る
 3. [デベロッパーダッシュボード](https://chrome.google.com/webstore/devconsole)で新しいアイテムを作り、上記 ZIP を上げる
 4. 本ファイルの内容を各入力欄へ写す
-5. スクリーンショットを添える
+5. スクリーンショット（`docs/store/screenshot-1280x800.png`）を添える
 6. 審査に出す
 
 バージョンを上げるときは `manifest.json` と `package.json` の両方を直す。**Chrome ウェブストアはバージョンを下げられない。**

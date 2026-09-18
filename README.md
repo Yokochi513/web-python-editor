@@ -133,7 +133,7 @@ Chrome ウェブストアには未登録。いまは手元で読み込んで使�
 未着手のものは次のとおり。
 
 - `main.js` に自動テストが無い（下記）
-- Chrome ウェブストアへ未登録。提出物は揃っているが、スクリーンショットとデベロッパー登録が残っている（[docs/store-listing.md](docs/store-listing.md)）
+- Chrome ウェブストアへ未登録。提出物は揃っており、残るはデベロッパー登録のみ（[docs/store-listing.md](docs/store-listing.md)）
 
 ## 開発
 
