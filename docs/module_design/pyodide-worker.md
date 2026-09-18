@@ -429,7 +429,7 @@ UI は `message` と `traceback` を出力領域にインラインで表示す�
 
 ```
 Traceback (most recent call last):
-  File "<exec>", line 7, in <module>
+  File "<exec>", line 8, in <module>
 ZeroDivisionError: division by zero
 ```
 

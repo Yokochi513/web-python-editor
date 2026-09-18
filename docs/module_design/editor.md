@@ -31,11 +31,9 @@
 | `syntax/string` | `#50a14f` | `string` / `special(string)`（f-string） |
 | `syntax/number` | `#986801` | `number` / `bool` / `null` |
 | `syntax/function` | `#4078f2` | `function(variableName)` / `function(definition(variableName))` |
-| `syntax/comment` | **未定義** | `comment` / `lineComment` |
+| `syntax/comment` | `#a0a1a7` | `comment` / `lineComment` |
 
 `bool` と `null` を `syntax/number` に寄せるのは、`True` / `False` / `None` が構文上の要素ではなく**リテラル**だからである。`keyword` に寄せると、値であることが色から読めなくなる。
-
-**`syntax/comment` だけ Figma に定義がない。** ハイライトを組むには 1 つ足りないため、トークンの追加を待つ。
 
 `ViewState` は次の形とする。
 
