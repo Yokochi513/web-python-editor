@@ -8,7 +8,8 @@
   },
   "scripts": {
     "build": "node build.js",
-    "watch": "node build.js --watch"
+    "watch": "node build.js --watch",
+    "test": "node build.js && node --experimental-wasm-jspi --test \"test/*.test.js\""
   },
   "repository": {
     "type": "git",

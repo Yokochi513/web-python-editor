@@ -275,6 +275,7 @@ web-python-editor/
 │   ├── shared/
 │   │   └── protocol.js         メッセージ種別の定義（UI / Worker 共用）
 │   └── icons/                  拡張のアイコン（16 / 32 / 48 / 128px）
+├── test/                       node:test による自動テスト（[ADR 0031](ADR/0031-write-tests-with-node-test-runner.md)）
 ├── docs/
 │   ├── design.md
 │   └── ADR/

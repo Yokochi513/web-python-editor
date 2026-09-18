@@ -101,6 +101,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0028](docs/ADR/0028-bundle-fonts-used-by-the-design.md) | 画面設計が使うフォントを拡張へ同梱する | 採用 |
 | [0029](docs/ADR/0029-show-indent-depth-with-colored-guides.md) | インデントの深さを、色の変わる縦線で示す | 採用 |
 | [0030](docs/ADR/0030-design-the-icon-as-stair-stepped-bars.md) | アイコンは段づけした 4 本の線とする | 採用 |
+| [0031](docs/ADR/0031-write-tests-with-node-test-runner.md) | 自動テストは `node:test` で書き、DOM を要さない範囲に限る | 採用 |
 
 ## 現在のステータス
 
@@ -117,7 +118,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 
 未着手のものは次のとおり。
 
-- 自動テストが無い。実装中の検証は、Worker をヘッドレスで叩く使い捨てのハーネスと、設計書・HTML・CSS との静的な整合チェックで行った
+- `main.js` に自動テストが無い（下記）
 - 配布の形（パッケージ化、ストアへの登録）を決めていない
 
 ## 開発
@@ -126,6 +127,19 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 npm install
 npm run build      # dist/ を作る
 npm run watch      # ソースの変更を監視して再ビルドする
+npm test           # ビルドしてから自動テストを走らせる
 ```
+
+### テストが見ている範囲
+
+`node:test` で書く（[ADR 0031](docs/ADR/0031-write-tests-with-node-test-runner.md)）。依存は増やしていない。
+
+| 対象 | やり方 |
+| --- | --- |
+| `protocol.js` | 期待値を基本設計 §4 の表から写して突き合わせる |
+| `editor.js` | `state` と `dispatch` だけを持つ偽の `view` を渡し、公開 API のまま試す |
+| `pyodide-worker.js` | ビルド済みの `dist/` を本物の Pyodide で動かす。初期化・実行・traceback の整形・構文チェック・`input()` の往復・EOF まで |
+
+**`main.js` は対象外。** DOM と `chrome.*` の両方が要り、入力面が依存しているのは IME の合成イベントや `contenteditable` の挙動といったブラウザの実装そのものなので、jsdom で通っても Chrome で通る保証にならない。ここは実機で確かめる。
 
 `dist/` を `chrome://extensions` の「パッケージ化されていない拡張機能を読み込む」で読み込む。**HMR は使わない**（[ADR 0007](docs/ADR/0007-use-esbuild-as-bundler.md)）ため、変更の確認はビルドと拡張のリロードで行う。
