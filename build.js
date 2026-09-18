@@ -25,6 +25,7 @@ const staticAssets = [
   ["manifest.json", "dist/manifest.json"],
   ["src/sidepanel/sidepanel.html", "dist/sidepanel/sidepanel.html"],
   ["src/sidepanel/style.css", "dist/sidepanel/style.css"],
+  ["src/icons", "dist/icons"],
 ];
 
 // Pyodide 一式は node_modules から直接配る（ADR 0027）。

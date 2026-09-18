@@ -100,6 +100,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0027](docs/ADR/0027-copy-pyodide-from-node-modules-at-build-time.md) | Pyodide 一式は `vendor/` に置かず、ビルド時に `node_modules` から配る | 採用 |
 | [0028](docs/ADR/0028-bundle-fonts-used-by-the-design.md) | 画面設計が使うフォントを拡張へ同梱する | 採用 |
 | [0029](docs/ADR/0029-show-indent-depth-with-colored-guides.md) | インデントの深さを、色の変わる縦線で示す | 採用 |
+| [0030](docs/ADR/0030-design-the-icon-as-stair-stepped-bars.md) | アイコンは段づけした 4 本の線とする | 採用 |
 
 ## 現在のステータス
 
@@ -117,7 +118,6 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 未着手のものは次のとおり。
 
 - 自動テストが無い。実装中の検証は、Worker をヘッドレスで叩く使い捨てのハーネスと、設計書・HTML・CSS との静的な整合チェックで行った
-- アイコンが無い（Chrome の既定が表示される）
 - 配布の形（パッケージ化、ストアへの登録）を決めていない
 
 ## 開発

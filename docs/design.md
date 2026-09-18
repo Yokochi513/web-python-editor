@@ -272,8 +272,9 @@ web-python-editor/
 │   │   └── style.css
 │   ├── worker/
 │   │   └── pyodide-worker.js
-│   └── shared/
-│       └── protocol.js         メッセージ種別の定義（UI / Worker 共用）
+│   ├── shared/
+│   │   └── protocol.js         メッセージ種別の定義（UI / Worker 共用）
+│   └── icons/                  拡張のアイコン（16 / 32 / 48 / 128px）
 ├── docs/
 │   ├── design.md
 │   └── ADR/
@@ -295,6 +296,7 @@ esbuild で依存を結合し、静的アセットを `dist/` へコピーする
 
 - `manifest.json`
 - `src/sidepanel/sidepanel.html`、`style.css`
+- `src/icons/` 一式
 - `node_modules/pyodide/` から 5 ファイル（`pyodide.mjs` / `pyodide.asm.mjs` / `pyodide.asm.wasm` / `python_stdlib.zip` / `pyodide-lock.json`）を `dist/pyodide/` へ（[ADR 0027](ADR/0027-copy-pyodide-from-node-modules-at-build-time.md)）
 - `@fontsource` から Noto Sans JP（400 / 500 / 700）と JetBrains Mono（400）の woff2 を `dist/fonts/` へ（[ADR 0028](ADR/0028-bundle-fonts-used-by-the-design.md)）
 
@@ -309,6 +311,8 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
   "manifest_version": 3,
   "minimum_chrome_version": "137",
   "permissions": ["sidePanel", "storage"],
+  "icons": { "16": "icons/icon-16.png", "32": "...", "48": "...", "128": "..." },
+  "action": { "default_icon": { "16": "icons/icon-16.png", "…": "…" } },
   "side_panel": { "default_path": "sidepanel/sidepanel.html" },
   "background": {
     "service_worker": "background/service-worker.js",
@@ -323,6 +327,7 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 - `'wasm-unsafe-eval'` は Pyodide の WebAssembly 実行に必須（[ADR 0004](ADR/0004-use-pyodide-as-python-runtime.md)）
 - `minimum_chrome_version: 137` は JSPI の要件（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。`chrome.sidePanel` API の要件は 114 だが（[ADR 0006](ADR/0006-use-side-panel-as-editor-surface.md)）、下限を決めるのは JSPI の側になる
 - `storage` 権限は編集中コードの永続化に用いる（§2.2 / [ADR 0013](ADR/0013-persist-code-in-storage-local.md)）
+- `icons` と `action.default_icon` は同じ 4 枚を指す（[ADR 0030](ADR/0030-design-the-icon-as-stair-stepped-bars.md)）。前者は拡張の一覧やストア、後者はツールバーで使われる
 - `action` は省けない。Service Worker が呼ぶ `setPanelBehavior({ openPanelOnActionClick: true })` はツールバーアイコンのクリックに紐づくものであり、`action` が無いとアイコン自体が置かれない（[service-worker.md](module_design/service-worker.md)）
 - `name` / `version` / `description` は `package.json` と揃える。アイコンは用意していないため、Chrome の既定のアイコンが表示される
 
