@@ -97,6 +97,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0024](docs/ADR/0024-mark-run-boundary-in-output.md) | 実行の開始時に出力領域へ区切りの行を入れる | 採用 |
 | [0025](docs/ADR/0025-warm-up-python-before-ready.md) | `ready` を送る前に Python を一度暖機する | 採用 |
 | [0026](docs/ADR/0026-keep-editor-editable-while-running.md) | 実行中もエディタは編集可能とする | 採用 |
+| [0027](docs/ADR/0027-copy-pyodide-from-node-modules-at-build-time.md) | Pyodide 一式は `vendor/` に置かず、ビルド時に `node_modules` から配る | 採用 |
 
 ## 現在のステータス
 

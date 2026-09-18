@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "web-python-editor",
+  "version": "1.0.0",
+  "description": "ブラウザ上で Python の編集から実行までを完結させる Chrome 拡張機能。",
+  "minimum_chrome_version": "137",
+  "permissions": ["sidePanel", "storage"],
+  "action": {
+    "default_title": "Python エディタを開く"
+  },
+  "side_panel": {
+    "default_path": "sidepanel/sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background/service-worker.js",
+    "type": "module"
+  },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

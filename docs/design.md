@@ -274,8 +274,6 @@ web-python-editor/
 │   │   └── pyodide-worker.js
 │   └── shared/
 │       └── protocol.js         メッセージ種別の定義（UI / Worker 共用）
-├── vendor/
-│   └── pyodide/                同梱する Pyodide 一式（コピー元）
 ├── docs/
 │   ├── design.md
 │   └── ADR/
@@ -296,9 +294,9 @@ esbuild で依存を結合し、静的アセットを `dist/` へコピーする
 
 - `manifest.json`
 - `src/sidepanel/sidepanel.html`、`style.css`
-- `vendor/pyodide/` 一式
+- `node_modules/pyodide/` から 5 ファイル（`pyodide.mjs` / `pyodide.asm.mjs` / `pyodide.asm.wasm` / `python_stdlib.zip` / `pyodide-lock.json`）を `dist/pyodide/` へ（[ADR 0027](ADR/0027-copy-pyodide-from-node-modules-at-build-time.md)）
 
-Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先のパスを Worker の読み込みパスと一致させる。
+Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先のパスを Worker の読み込みパスと一致させる。Pyodide をリポジトリに持たないため、クローン直後は `npm install` を挟まないとビルドが通らない。
 
 `dist/` が拡張の読み込み対象となるため、開発時もソースツリーを直接読み込むことはできず、ビルドを挟む。HMR は使わず、確認はビルド + 拡張のリロードで行う（watch モードでビルドは自動化できる）。
 
@@ -323,6 +321,8 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 - `'wasm-unsafe-eval'` は Pyodide の WebAssembly 実行に必須（[ADR 0004](ADR/0004-use-pyodide-as-python-runtime.md)）
 - `minimum_chrome_version: 137` は JSPI の要件（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。`chrome.sidePanel` API の要件は 114 だが（[ADR 0006](ADR/0006-use-side-panel-as-editor-surface.md)）、下限を決めるのは JSPI の側になる
 - `storage` 権限は編集中コードの永続化に用いる（§2.2 / [ADR 0013](ADR/0013-persist-code-in-storage-local.md)）
+- `action` は省けない。Service Worker が呼ぶ `setPanelBehavior({ openPanelOnActionClick: true })` はツールバーアイコンのクリックに紐づくものであり、`action` が無いとアイコン自体が置かれない（[service-worker.md](module_design/service-worker.md)）
+- `name` / `version` / `description` は `package.json` と揃える。アイコンは用意していないため、Chrome の既定のアイコンが表示される
 
 ## 9. 未決定事項
 
