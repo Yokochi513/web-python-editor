@@ -38,6 +38,19 @@ const pyodideAssets = [
   "pyodide-lock.json", // loadPyodide が読む同梱物の一覧
 ];
 
+// 画面設計が使うフォント（ADR 0028）。style.css の @font-face と 1 対 1 で対応する。
+// ここに無いウェイトを CSS で指定すると、ブラウザが合成した偽のボールドになる。
+const fontAssets = [
+  "@fontsource/noto-sans-jp/files/noto-sans-jp-japanese-400-normal.woff2",
+  "@fontsource/noto-sans-jp/files/noto-sans-jp-japanese-500-normal.woff2",
+  "@fontsource/noto-sans-jp/files/noto-sans-jp-japanese-700-normal.woff2",
+  "@fontsource/noto-sans-jp/files/noto-sans-jp-latin-400-normal.woff2",
+  "@fontsource/noto-sans-jp/files/noto-sans-jp-latin-500-normal.woff2",
+  "@fontsource/noto-sans-jp/files/noto-sans-jp-latin-700-normal.woff2",
+  "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-400-normal.woff2",
+  "@fontsource/jetbrains-mono/files/jetbrains-mono-latin-ext-400-normal.woff2",
+];
+
 async function copyStaticAssets() {
   for (const [from, to] of staticAssets) {
     if (!existsSync(from)) {
@@ -49,16 +62,27 @@ async function copyStaticAssets() {
   }
 
   // こちらは飛ばさない。欠けたままビルドが通ると、拡張を読み込んで
-  // 実行するまで失敗に気付けない（ADR 0027）。
-  await mkdir("dist/pyodide", { recursive: true });
-  for (const name of pyodideAssets) {
-    const from = `node_modules/pyodide/${name}`;
+  // 実行するまで失敗に気付けない（ADR 0027 / ADR 0028）。
+  await copyFromNodeModules(
+    pyodideAssets.map((name) => [`pyodide/${name}`, `dist/pyodide/${name}`]),
+    "Pyodide",
+  );
+  await copyFromNodeModules(
+    fontAssets.map((path) => [path, `dist/fonts/${path.split("/").pop()}`]),
+    "フォント",
+  );
+}
+
+async function copyFromNodeModules(pairs, label) {
+  for (const [name, to] of pairs) {
+    const from = `node_modules/${name}`;
     if (!existsSync(from)) {
       throw new Error(
-        `${from} が無い。npm install は済んでいるか、Pyodide の更新でファイル構成が変わっていないかを確かめること`,
+        `${from} が無い。npm install は済んでいるか、${label}の更新でファイル構成が変わっていないかを確かめること`,
       );
     }
-    await cp(from, `dist/pyodide/${name}`);
+    await mkdir(dirname(to), { recursive: true });
+    await cp(from, to);
   }
 }
 

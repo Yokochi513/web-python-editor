@@ -197,7 +197,7 @@ CPython は最初の構文エラーで解析を止めるため、**一度に得�
 
 ```
 ┌─────────────────────────────┐
-│ ● 準備完了      [実行] [停止] │  ツールバー 44px
+│ ● 準備完了      [実行] [停止] │  ツールバー 49px
 ├─────────────────────────────┤
 │ 1  import math              │
 │ 2                           │
@@ -278,6 +278,7 @@ web-python-editor/
 │   ├── design.md
 │   └── ADR/
 └── dist/                       ビルド成果物。拡張の読み込み対象
+    └── fonts/                  同梱するフォント（[ADR 0028](ADR/0028-bundle-fonts-used-by-the-design.md)）
 ```
 
 ## 7. ビルド
@@ -295,6 +296,7 @@ esbuild で依存を結合し、静的アセットを `dist/` へコピーする
 - `manifest.json`
 - `src/sidepanel/sidepanel.html`、`style.css`
 - `node_modules/pyodide/` から 5 ファイル（`pyodide.mjs` / `pyodide.asm.mjs` / `pyodide.asm.wasm` / `python_stdlib.zip` / `pyodide-lock.json`）を `dist/pyodide/` へ（[ADR 0027](ADR/0027-copy-pyodide-from-node-modules-at-build-time.md)）
+- `@fontsource` から Noto Sans JP（400 / 500 / 700）と JetBrains Mono（400）の woff2 を `dist/fonts/` へ（[ADR 0028](ADR/0028-bundle-fonts-used-by-the-design.md)）
 
 Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先のパスを Worker の読み込みパスと一致させる。Pyodide をリポジトリに持たないため、クローン直後は `npm install` を挟まないとビルドが通らない。
 
