@@ -91,6 +91,10 @@ const options = {
   // Worker は実行時に dist/pyodide/ から読む。コピー先のパスと一致させること。
   external: ["*/pyodide/pyodide.mjs", "*.wasm", "*.zip"],
 
+  // 既定では日本語が \uXXXX へ落ちる。文言は UI にもログにも出るため、
+  // 出力をそのまま読める形に保つ。出力は ESM で UTF-8 として解釈される。
+  charset: "utf8",
+
   sourcemap: watch ? "inline" : false,
   logLevel: "info",
   plugins: [copyStaticAssetsPlugin],
