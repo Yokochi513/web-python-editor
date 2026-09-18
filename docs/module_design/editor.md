@@ -118,7 +118,7 @@ function buildExtensions(options: { onDocChanged?: () => void }): Extension[]
 | `keymap.of(defaultKeymap)` | 基本キーマップ |
 | `indentOnInput()` | 入力時のデデント |
 | `keymap.of([indentWithTab])` + `indentUnit.of("    ")` | Tab インデント（スペース 4） |
-| `closeBrackets()` / `bracketMatching()` | 括弧の補完と対応表示 |
+| `closeBrackets()` + `closeBracketsKeymap` / `bracketMatching()` | 括弧の補完と対応表示。`closeBracketsKeymap` が無いと、自動挿入された括弧対を Backspace で消すときに片方しか消えない。`defaultKeymap` の `deleteCharBackward` より先に置く |
 | `autocompletion()` | 補完。ソースは `python()` が登録する `localCompletionSource` と `globalCompletion` に任せ、`override` は使わない（[ADR 0018](../ADR/0018-delegate-completion-sources-to-python-support.md)） |
 | `drawSelection()` / `dropCursor()` / `highlightSpecialChars()` | 選択とカーソルの描画 |
 | `lint` の状態フィールド（`lintGutter` は伴わない） | 構文チェックの表示（[§3.4](../design.md)。`showDiagnostics` から差し込む） |
@@ -312,10 +312,12 @@ CPython は最初の構文エラーで解析を止めるため、**`diagnostics`
 手順 2 の `to` は次の順で決める。
 
 1. `endLine` / `endColumn` が揃っていればそれを使う
-2. 無ければ**その行の行末**までとする
-3. それでも `to <= from` になる場合は、`from` を 1 文字戻して行末までとする
+2. 無い場合、および `to <= from` になる場合は**その行の行末**までとする
+3. それでもなお `to <= from` の場合に限り、`from` を 1 文字戻す
 
-行末までを引くのは、CPython の `^` が指す位置以降が疑わしいという実態に合うためである。該当トークンの末尾までに絞るには字句解析が要り、**`compile()` だけで済ませるという方針**（[ADR 0015](../ADR/0015-check-syntax-before-run-in-worker.md)）に反する。手順 3 は幅 0 の下線が見えないことへの対処で、行末にエラー位置が来る「予期しない EOF」系で効く。
+行末までを引くのは、CPython の `^` が指す位置以降が疑わしいという実態に合うためである。該当トークンの末尾までに絞るには字句解析が要り、**`compile()` だけで済ませるという方針**（[ADR 0015](../ADR/0015-check-syntax-before-run-in-worker.md)）に反する。
+
+**`endColumn` が `from` より手前を指すことは実際にある。** CPython は `'(' was never closed` に対して `end_offset` に `0` を返す（実装時の実機テストで確認）。手順 2 がこれを行末で受けるため、手順 3 まで落ちるのは行末にエラー位置が来る「予期しない EOF」系に限られる。手順 3 は幅 0 の下線が見えないことへの対処であり、`from` を動かすのはその場合だけとする。
 
 診断の位置は、以降の文書変更に合わせて CodeMirror 側が自動で追従させる。検査結果が届くまでの間に編集が進んでいても、下線が無関係な場所へずれることはない。
 
