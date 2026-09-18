@@ -23,7 +23,12 @@ import {
   syntaxHighlighting,
 } from "@codemirror/language";
 import { defaultKeymap, history, historyKeymap, indentWithTab } from "@codemirror/commands";
-import { autocompletion, closeBrackets, closeBracketsKeymap } from "@codemirror/autocomplete";
+import {
+  acceptCompletion,
+  autocompletion,
+  closeBrackets,
+  closeBracketsKeymap,
+} from "@codemirror/autocomplete";
 import { linter, setDiagnostics } from "@codemirror/lint";
 import { python } from "@codemirror/lang-python";
 import { tags as t } from "@lezer/highlight";
@@ -76,7 +81,21 @@ export function buildExtensions(options = {}) {
     keymap.of(defaultKeymap),
     indentOnInput(),
     indentUnit.of("    "),
-    keymap.of([indentWithTab]),
+    // Tab は補完の確定を先に試す。completionKeymap が割り当てているのは Enter
+    // だけで Tab は素通しになり、補完を選んでいる最中の Tab が indentWithTab に
+    // 拾われてインデントが入ってしまう。acceptCompletion は補完が出ていなければ
+    // false を返すため、そのまま indentWithTab へ落ちる。
+    keymap.of([{ key: "Tab", run: acceptCompletion }, indentWithTab]),
+    // Ctrl+D は握りつぶす。ADR 0021 でこの拡張のキー（入力の打ち切り）として
+    // 主張している以上、エディタ側で Chrome のブックマークが開くのは不整合に
+    // なる。エディタには打ち切る入力が無いため、何もしないで止める。
+    //
+    // win / linux に限るのは、ブックマークに割り当てられているのがその 2 つだから
+    // である（mac は Cmd+D）。mac では @codemirror/commands の Ctrl-D
+    // （deleteCharForward）が生きており、奪う理由がない。同じキーが
+    // emacsStyleKeymap から standardKeymap へ取り込まれる際に mac 限定へ変換
+    // されるため、win / linux では誰も受け取らない状態になっている。
+    keymap.of([{ win: "Ctrl-d", linux: "Ctrl-d", run: () => true, preventDefault: true }]),
     closeBrackets(),
     bracketMatching(),
     // 補完のソースは python() が登録する localCompletionSource と globalCompletion に

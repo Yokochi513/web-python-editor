@@ -117,7 +117,8 @@ function buildExtensions(options: { onDocChanged?: () => void }): Extension[]
 | `history()` + `historyKeymap` | undo / redo |
 | `keymap.of(defaultKeymap)` | 基本キーマップ |
 | `indentOnInput()` | 入力時のデデント |
-| `keymap.of([indentWithTab])` + `indentUnit.of("    ")` | Tab インデント（スペース 4） |
+| `keymap.of([{ key: "Tab", run: acceptCompletion }, indentWithTab])` + `indentUnit.of("    ")` | Tab インデント（スペース 4）。**Tab は補完の確定を先に試す。** `completionKeymap` が割り当てているのは Enter だけで Tab は素通しになり、補完を選んでいる最中の Tab が `indentWithTab` に拾われてインデントが入る（実機で判明）。`acceptCompletion` は補完が出ていなければ `false` を返すため、そのまま `indentWithTab` へ落ちる |
+| `keymap.of([{ win: "Ctrl-d", linux: "Ctrl-d", run: () => true }])` | **Ctrl+D を握りつぶす。** [ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md) がこのキーを入力の打ち切りとして主張している以上、エディタ側で Chrome のブックマークが開くのは不整合になる。エディタには打ち切る入力が無いため何もしないで止める。`win` / `linux` に限るのは、ブックマークに割り当てられているのがその 2 つだからで、mac では `@codemirror/commands` の `deleteCharForward` が生きている |
 | `closeBrackets()` + `closeBracketsKeymap` / `bracketMatching()` | 括弧の補完と対応表示。`closeBracketsKeymap` が無いと、自動挿入された括弧対を Backspace で消すときに片方しか消えない。`defaultKeymap` の `deleteCharBackward` より先に置く |
 | `autocompletion()` | 補完。ソースは `python()` が登録する `localCompletionSource` と `globalCompletion` に任せ、`override` は使わない（[ADR 0018](../ADR/0018-delegate-completion-sources-to-python-support.md)） |
 | `drawSelection()` / `dropCursor()` / `highlightSpecialChars()` | 選択とカーソルの描画 |
@@ -127,6 +128,8 @@ function buildExtensions(options: { onDocChanged?: () => void }): Extension[]
 含めないもの。折りたたみ（ガターをもう 1 列使う）、検索（狭い幅にパネルを重ねる）、現在行の強調と一致強調（配色トークンが未定義）、矩形選択。
 
 **行の折り返しは行わない。** `EditorView.lineWrapping` を含めない。折り返すと行番号と表示行がずれるため、長い行は横スクロールで扱う。
+
+**ブラウザのショートカットと衝突するキーは、パネル全体で意味を揃える。** 現時点で該当するのは `Ctrl+D` のみで、出力領域では EOF（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）、エディタでは何もしない。フォーカスの位置によってブラウザのダイアログが出たり出なかったりする状態を残さない。
 
 **`EditorState.readOnly` / `EditorView.editable` を扱わない。** 実行中・入力待ちの間もエディタは編集可能なままとする（[ADR 0026](../ADR/0026-keep-editor-editable-while-running.md)）。状態によって切り替える経路を作らないため、本モジュールに実行状態が漏れてこない。
 
