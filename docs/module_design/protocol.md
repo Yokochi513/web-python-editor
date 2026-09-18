@@ -9,7 +9,7 @@
 
 そこで [基本設計 §4](../design.md) のメッセージ仕様を本モジュールに 1 箇所だけ定義し、UI と Worker の両方から import する。ビルドは UI と Worker で別エントリだが（[基本設計 §7](../design.md)）、同じソースが両方のバンドルへ結合されるため定義の実体は 1 つに保たれる。
 
-**本モジュールは型と定数の置き場であり、振る舞いを持たない。** メッセージの送受信そのものは `main.js` と `pyodide-worker.js` が行う。
+**本モジュールは型と定数の置き場であり、振る舞いを持たない。** メッセージの送受信そのものは `main.js` と `pyodide-worker.js` が行う。生成関数も検証関数も識別子の採番も置かない（「関数詳細」を参照）。
 
 ## 関数一覧
 <!-- どのような関数があるのか -->
@@ -28,7 +28,7 @@
 | キー | 値 | ペイロード | 意味 |
 | ---- | --- | ---- | ---- |
 | `RUN` | `"run"` | `{ runId, code }` | コードの実行要求 |
-| `STDIN_RESULT` | `"stdinResult"` | `{ runId, text }` | `stdin` への応答（確定した 1 行） |
+| `STDIN_RESULT` | `"stdinResult"` | `{ runId, text }` | `stdin` への応答。確定した 1 行。EOF の場合は `text` が `null`（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)） |
 | `CHECK` | `"check"` | `{ checkId, code }` | 構文チェックの要求（実行は伴わない） |
 
 ### WORKER_TO_UI
@@ -42,18 +42,42 @@
 | `DONE` | `"done"` | `{ runId }` | 正常終了 |
 | `ERROR` | `"error"` | `{ runId, message, traceback }` | 実行時例外 |
 | `INIT_ERROR` | `"initError"` | `{ message }` | Pyodide の初期化失敗 |
-| `CHECK_RESULT` | `"checkResult"` | `{ checkId, diagnostics }` | 構文チェックの結果。`diagnostics` は最大 1 件 |
+| `CHECK_RESULT` | `"checkResult"` | `{ checkId, diagnostics }` | 構文チェックの結果。`diagnostics` は `SyntaxDiagnostic` の配列で最大 1 件 |
 
 停止要求のメッセージは存在しない。停止は `worker.terminate()` で行うため（[基本設計 §3.3](../design.md)）。
 
-## 関数詳細
-<!-- 各関数の説明 -->
+**`READY` にペイロードは持たせない。** Pyodide のバージョンや初期化の所要時間を載せれば初期化コストの実測に使えるが、実測は使い捨てのスパイクでやることである（`spike/lifecycle-check/` で `loadPyodide` の 1,423ms を測った例がある）。製品のメッセージに測定用の欄を置くと、**以後ずっと誰も読まない欄が残る。**
 
-公開する関数がないため記載しない。本モジュールに振る舞いを持たせるかどうかは「未決事項」を参照。
+### ペイロードの型定義
 
-## 未決事項
+`type` の綴りは定数で守られるが、ペイロードの欄名（`runId` / `text` / `prompt` 等）は両側の直書きのままである。ここは **JSDoc の `@typedef`** で 1 箇所に集める。
 
-- **メッセージの生成関数（ファクトリ）を持たせるか。** `type` の綴りは定数で守られるが、ペイロードの欄名（`runId` / `text` / `prompt` 等）は依然として両側の直書きになる。`makeRun(runId, code)` のような生成関数を置けばそこも 1 箇所になるが、本モジュールの責務が「定義」から「組み立て」へ広がる。どちらを採るか決めていない。
-- **受信時の検証関数を持たせるか。** UI と Worker は同じ拡張パッケージ内の相手としか通信しないため、素性の分からないメッセージは届かない前提に立てる。一方で、`terminate()` と Worker の作り直し（[基本設計 §3.3](../design.md)）を挟むと、破棄済み Worker からの遅延メッセージという想定外の受信はあり得る。検証をここに置くか、受け手側の責務にするか決めていない。
-- **`runId` / `checkId` の採番をどこで行い、どのような値にするか。** [基本設計 §4](../design.md) は用途（遅延して届いた出力を破棄済みの実行のものと判別する）のみを定めており、採番の主体と形式を定めていない。発行するのは UI 側だけなので `main.js` に置くのが自然だが、識別子の定義という意味では本モジュールの担当ともいえる。
-- **`WORKER_TO_UI.READY` にペイロードを持たせるか。** [基本設計 §4](../design.md) では「なし」だが、Pyodide のバージョンや初期化所要時間を載せると初期化コストの実測（[基本設計 §9](../design.md) の検証項目）に使える。載せるかどうかは決めていない。
+```js
+/** @typedef {{ runId: string, code: string }} RunPayload */
+/** @typedef {{ runId: string, text: string | null }} StdinResultPayload */
+/** @typedef {{ line: number, column: number, endLine: number | null, endColumn: number | null, message: string }} SyntaxDiagnostic */
+```
+
+型注釈は素の JavaScript のまま書ける（[ADR 0002](../ADR/0002-use-vanilla-js-html-css.md)）。esbuild はトランスパイルを行わないが（[ADR 0007](../ADR/0007-use-esbuild-as-bundler.md)）、JSDoc はコメントなのでそのまま通り、エディタの補完も効く。**責務は「定義」のままで、欄名の一元化だけを果たす。**
+
+`SyntaxDiagnostic` に CodeMirror の `Diagnostic`（`from` / `to` / `severity`）を持ち込まないのは [ADR 0020](../ADR/0020-send-diagnostics-as-line-column.md) による。オフセットへの変換は `editor.js` が行う。
+
+### 生成関数（ファクトリ）は置かない
+
+`makeRun(runId, code)` のような生成関数は置かない。
+
+欄名を 1 箇所に集める目的なら上の `@typedef` で足り、生成関数は本モジュールの責務を「定義」から「組み立て」へ広げる。得られるものも小さい。**`makeRun(code, runId)` と引数を取り違える誤りは、`{ runId, code }` の綴りを間違えるより気づきにくい。** 綴りの誤りは受け手で `undefined` になって表面化するが、引数順の誤りは型の合う値が入れ替わるだけで、そのまま流れていく。
+
+### 検証関数も置かない
+
+受信したメッセージの検証は**受け手側（`main.js` / `pyodide-worker.js`）の責務**とする。
+
+UI と Worker は同じ拡張パッケージ内の相手としか通信しないため、素性の分からないメッセージは届かない。実際に起こり得る想定外は、`terminate()` と Worker の作り直し（[基本設計 §3.3](../design.md)）を挟んだときの**破棄済み Worker からの遅延メッセージ**である。
+
+これは「素性が正しいか」ではなく「**古いか**」の判定であり、判定に要る `currentRunId` / `latestCheckId` を知っているのは受け手だけである。本モジュールには置けない。
+
+### 識別子を採番しない
+
+`runId` / `checkId` の採番は `main.js` が行う（[main.md](main.md) の `nextId`）。発行するのは UI 側だけであり、形式は `run-1` / `check-1` の連番とする。
+
+識別子の**定義**は本モジュールの担当といえるが、**値の生成**は状態を持つ操作である。連番のカウンタを本モジュールに置けば、振る舞いを持たないという前提が崩れる。

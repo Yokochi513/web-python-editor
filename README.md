@@ -90,6 +90,13 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0017](docs/ADR/0017-limit-adr-scope-to-basic-design.md) | ADR に記録する決定は基本設計を変えるものに限る | 採用 |
 | [0018](docs/ADR/0018-delegate-completion-sources-to-python-support.md) | 補完ソースは `python()` が登録する 2 つに任せる | 採用 |
 | [0019](docs/ADR/0019-flush-on-visibilitychange-hidden.md) | 保存のフラッシュ契機は `visibilitychange` の hidden のみとする | 採用 |
+| [0020](docs/ADR/0020-send-diagnostics-as-line-column.md) | 構文チェックの診断は行・桁で送り、オフセットへの変換は UI 側で行う | 採用 |
+| [0021](docs/ADR/0021-represent-eof-as-null-stdin-result.md) | `input()` の EOF は `stdinResult` の `text` を `null` にして表す | 採用 |
+| [0022](docs/ADR/0022-queue-pasted-lines-as-stdin.md) | 貼り付けられた複数行は入力のキューとして扱う | 採用 |
+| [0023](docs/ADR/0023-cap-output-pane-size.md) | 出力領域に行数と 1 行の文字数の上限を設ける | 採用 |
+| [0024](docs/ADR/0024-mark-run-boundary-in-output.md) | 実行の開始時に出力領域へ区切りの行を入れる | 採用 |
+| [0025](docs/ADR/0025-warm-up-python-before-ready.md) | `ready` を送る前に Python を一度暖機する | 採用 |
+| [0026](docs/ADR/0026-keep-editor-editable-while-running.md) | 実行中もエディタは編集可能とする | 採用 |
 
 ## 現在のステータス
 

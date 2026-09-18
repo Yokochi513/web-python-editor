@@ -20,14 +20,30 @@
 | `getViewState` | `view` | `ViewState` | 永続化の対象（コード・キャレット位置・スクロール位置）をまとめて取り出す |
 | `applyViewState` | `view`, `state` | `void` | 保存しておいた状態をエディタへ復元する |
 | `showDiagnostics` | `view`, `diagnostics` | `void` | 構文チェックの結果を下線とツールチップで表示する |
+| `focusEditor` | `view` | `void` | エディタへフォーカスを戻す |
 
-このほか、Python の構文ハイライトに用いる `HighlightStyle` を定数 `pythonHighlightStyle` として公開する。色は Figma の `syntax/*` トークンと 1 対 1 で対応させる（[ADR 0009](../ADR/0009-use-light-theme-as-base.md)）。
+このほか、Python の構文ハイライトに用いる `HighlightStyle` を定数 `pythonHighlightStyle` として公開する。色は Figma の `syntax/*` トークンと 1 対 1 で対応させる（[ADR 0009](../ADR/0009-use-light-theme-as-base.md)）。割り当ては次の通り。
+
+| トークン | 値 | 当てる `tags` |
+| --- | --- | --- |
+| `syntax/plain` | `#383a42` | 既定。`variableName` / `propertyName` / `operator` / `punctuation` |
+| `syntax/keyword` | `#a626a4` | `keyword` / `controlKeyword` / `moduleKeyword` / `operatorKeyword` |
+| `syntax/string` | `#50a14f` | `string` / `special(string)`（f-string） |
+| `syntax/number` | `#986801` | `number` / `bool` / `null` |
+| `syntax/function` | `#4078f2` | `function(variableName)` / `function(definition(variableName))` |
+| `syntax/comment` | **未定義** | `comment` / `lineComment` |
+
+`bool` と `null` を `syntax/number` に寄せるのは、`True` / `False` / `None` が構文上の要素ではなく**リテラル**だからである。`keyword` に寄せると、値であることが色から読めなくなる。
+
+**`syntax/comment` だけ Figma に定義がない。** ハイライトを組むには 1 つ足りないため、トークンの追加を待つ。
 
 `ViewState` は次の形とする。
 
 ```js
 { code: string, caret: number, scrollTop: number }
 ```
+
+`caret` は**位置 1 点**（`head`）で持ち、選択範囲は保存しない。保存するのは編集の再開位置であって、選択そのものではない。範囲を復元すると、**再開直後の打鍵が選択を置換する**事故になる。複数ウィンドウから同時に開かれた場合は後勝ちで別の内容が復元され得るため（[ADR 0013](../ADR/0013-persist-code-in-storage-local.md)）、範囲の意味はそもそも保てない。
 
 ## 関数詳細
 <!-- 各関数の説明 -->
@@ -58,6 +74,10 @@ function createEditor(options: {
 | `options.onDocChanged` | `() => void` | | 文書が変化したときに呼ぶコールバック |
 
 `onDocChanged` は `EditorView.updateListener` から `update.docChanged` が真のときだけ呼ぶ。**デバウンスは行わない。** [基本設計 §2.2](../design.md)（保存）と [§3.4](../design.md)（構文チェック）が求める 500ms の待ちは `main.js` 側の関心事であり、本モジュールは「変わった」という事実だけを伝える。
+
+500ms のデバウンスを `main.js` に置くのは、**保存と構文チェックが同じ契機を共有し、その調停が `main.js` の責務**だからである。本モジュールに置くと、契機の一方（保存）だけを知らないまま待ちを管理することになる。
+
+**復元による変更では `onDocChanged` を呼ばない**（`applyViewState` の項）。
 
 - 返り値一覧
 
@@ -109,6 +129,8 @@ function buildExtensions(options: { onDocChanged?: () => void }): Extension[]
 含めないもの。折りたたみ（ガターをもう 1 列使う）、検索（狭い幅にパネルを重ねる）、現在行の強調と一致強調（配色トークンが未定義）、矩形選択。
 
 **行の折り返しは行わない。** `EditorView.lineWrapping` を含めない。折り返すと行番号と表示行がずれるため、長い行は横スクロールで扱う。
+
+**`EditorState.readOnly` / `EditorView.editable` を扱わない。** 実行中・入力待ちの間もエディタは編集可能なままとする（[ADR 0026](../ADR/0026-keep-editor-editable-while-running.md)）。状態によって切り替える経路を作らないため、本モジュールに実行状態が漏れてこない。
 
 - 引数一覧
 
@@ -231,10 +253,19 @@ function applyViewState(view: EditorView, state: ViewState): void
 
 - フロー
 
-1. 文書全体を `state.code` で置き換える変更を `view.dispatch` する
+1. 文書全体を `state.code` で置き換える変更を、**復元の注釈を付けて** `view.dispatch` する
 2. `state.caret` を `0` 以上 `doc.length` 以下に丸め、同じトランザクションで `selection` を設定する
 3. `state.scrollTop` を `view.scrollDOM.scrollTop` へ代入する
-4. **復元による変更で `onDocChanged` を発火させない。** 発火させると起動直後に保存と構文チェックが走り、何も編集していないのに検査結果が出る
+
+**復元による変更で `onDocChanged` を発火させない。** 発火させると起動直後に保存と構文チェックが走り、何も編集していないのに検査結果が出る。
+
+抑止は **CodeMirror の `Annotation`** で行う。モジュール内で `Annotation.define()` した印を手順 1 のトランザクションに付け、`buildExtensions` が置く `updateListener` 側で、その印が付いたトランザクションを含む更新では `onDocChanged` を呼ばない。
+
+```js
+const restoreAnnotation = Annotation.define();
+```
+
+「リスナを登録する前に復元を済ませる」方法も採り得るが、その場合**契約の保証が `main.js` の呼び出し順に依存する。** 注釈なら「復元では発火しない」ことを本関数自身が保証でき、CodeMirror の語彙を本モジュールに閉じるという方針（[ADR 0014](../ADR/0014-compose-codemirror-extensions-explicitly.md)）とも揃う。
 
 - 例外処理
 
@@ -244,12 +275,14 @@ function applyViewState(view: EditorView, state: ViewState): void
 
 - シグネチャ
 ```js
-function showDiagnostics(view: EditorView, diagnostics: Diagnostic[]): void
+function showDiagnostics(view: EditorView, diagnostics: SyntaxDiagnostic[]): void
 ```
 
 - 概要
 
 Worker から届いた `checkResult` の内容をエディタ内に下線とツールチップで表示する（[基本設計 §3.4](../design.md) / [ADR 0015](../ADR/0015-check-syntax-before-run-in-worker.md)）。
+
+**受け取るのは行・桁で表された診断**であり、CodeMirror の `Diagnostic` への変換は本関数が行う（[ADR 0020](../ADR/0020-send-diagnostics-as-line-column.md)）。Worker 側に CodeMirror の型を組み立てさせると依存の向きが逆になり、`EditorView` などの語彙を本モジュールに閉じるという前提が崩れる。
 
 CodeMirror の `linter()` による周期的な呼び出しは使わず、`@codemirror/lint` の `setDiagnostics()` で**外から差し込む**。検査の実体は Worker 側の `compile()` にあり、結果は非同期に遅れて届くため、押し込む形が実態に合う。
 
@@ -262,7 +295,7 @@ CPython は最初の構文エラーで解析を止めるため、**`diagnostics`
 | 引数名 | 型  | 必須 | 内容 |
 | ------ | --- | ---- | ---- |
 | `view` | `EditorView` | ○ | 対象のインスタンス |
-| `diagnostics` | `Diagnostic[]` | ○ | 表示する診断。`{ from, to, severity, message }` の配列。空配列は「表示を消す」を意味する |
+| `diagnostics` | `SyntaxDiagnostic[]` | ○ | 表示する診断。`{ line, column, endLine, endColumn, message }` の配列（[基本設計 §4](../design.md)）。空配列は「表示を消す」を意味する |
 
 - 返り値一覧
 
@@ -272,8 +305,19 @@ CPython は最初の構文エラーで解析を止めるため、**`diagnostics`
 
 - フロー
 
-1. `setDiagnostics(view.state, diagnostics)` でトランザクションを組み立てる
-2. `view.dispatch` する
+1. 各要素の `line` / `column` を、現在の文書の行頭オフセットから `from` へ変換する
+2. `to` を決める（下記）
+3. `from` / `to` を `0` 以上 `doc.length` 以下に丸め、`severity: "error"` を付けて `Diagnostic` にする
+4. `setDiagnostics(view.state, ...)` でトランザクションを組み立てる
+5. `view.dispatch` する
+
+手順 2 の `to` は次の順で決める。
+
+1. `endLine` / `endColumn` が揃っていればそれを使う
+2. 無ければ**その行の行末**までとする
+3. それでも `to <= from` になる場合は、`from` を 1 文字戻して行末までとする
+
+行末までを引くのは、CPython の `^` が指す位置以降が疑わしいという実態に合うためである。該当トークンの末尾までに絞るには字句解析が要り、**`compile()` だけで済ませるという方針**（[ADR 0015](../ADR/0015-check-syntax-before-run-in-worker.md)）に反する。手順 3 は幅 0 の下線が見えないことへの対処で、行末にエラー位置が来る「予期しない EOF」系で効く。
 
 診断の位置は、以降の文書変更に合わせて CodeMirror 側が自動で追従させる。検査結果が届くまでの間に編集が進んでいても、下線が無関係な場所へずれることはない。
 
@@ -283,11 +327,41 @@ CPython は最初の構文エラーで解析を止めるため、**`diagnostics`
 
 `main.js` が `checkId` の照合によって古い結果を捨てることでこの経路はほぼ塞がれるが、本関数でも範囲を文書長へ丸めてから渡し、例外にしない。構文エラーの表示位置がずれることは、下線がまったく出ないことよりは軽い。
 
-## 未決事項
+### focusEditor関数
 
-- **`caret` を位置 1 点で持つか、選択範囲で持つか。** [基本設計 §2.2](../design.md) は「キャレット位置」としか書いていない。選択範囲まで復元する方が編集の再開としては自然だが、保存レコードの形が変わる。本書では 1 点（`head`）を仮に置いている。
-- **`syntax/*` の配色トークンの実値。** [ADR 0009](../ADR/0009-use-light-theme-as-base.md) と [ADR 0008](../ADR/0008-manage-screen-design-in-figma.md) により Figma で管理するが、トークンの定義がまだない。`pythonHighlightStyle` がどのタグにどの色を割り当てるかは Figma の確定待ち。
-- **500ms のデバウンスをどちらに置くか。** 本書では `main.js` に置く前提で `onDocChanged` を素通しにしている。保存（[基本設計 §2.2](../design.md)）と構文チェック（[§3.4](../design.md)）が同じ契機を共有するため 1 箇所にまとめられるが、その 1 箇所が `main.js` であるべきか本モジュールであるべきかは決めていない。
-- **`applyViewState` で `onDocChanged` を抑止する手段。** 「復元による変更では発火させない」とだけ決めており、実現方法（トランザクションに注釈を付けて `updateListener` 側で無視するか、リスナ登録前に復元を済ませるか）を決めていない。
-- **実行中にエディタを読み取り専用にするか。** [基本設計 §3.2](../design.md) はボタンの活性しか定めていない。実行中に編集できると、表示されているコードと実行中のコードが食い違う。一方で、長い実行の間に次のコードを書けないのは不便である。扱いを決めていない。
-- **入力待ちからエディタへフォーカスを戻す経路。** [基本設計 §3.2](../design.md) では `stdin` を受け取ると出力領域へフォーカスが移る。入力の確定後にエディタへ戻すのか、出力領域に留めるのかを決めていない。本モジュールにフォーカス操作の関数が要るかどうかがこれに依存する。
+- シグネチャ
+```js
+function focusEditor(view: EditorView): void
+```
+
+- 概要
+
+エディタへフォーカスを戻す。**入力待ちから戻る経路のためにある。**
+
+[基本設計 §3.2](../design.md) では `stdin` を受け取ると出力領域へフォーカスが移る。戻す契機を入力の確定時に置かないのは、`input()` がループで繰り返される場合に**フォーカスが出力領域とエディタの間を往復する**ためである。確定のたびに戻しても、次のプロンプトでまた出力領域へ移ることになる。
+
+戻す区切りは実行の終了（`done` / `error`）と停止に置く。`main.js` がそこで本関数を呼ぶ。
+
+**フォーカスが出力領域の中にある場合に限って呼ぶ**（判断は `main.js` 側）。実行中にユーザが自分でエディタを触っていた場合、そのフォーカスを奪い返す理由はない。
+
+- 引数一覧
+
+| 引数名 | 型  | 必須 | 内容 |
+| ------ | --- | ---- | ---- |
+| `view` | `EditorView` | ○ | 対象のインスタンス |
+
+- 返り値一覧
+
+| 返り値名 | 型  | 内容 |
+| -------- | --- | ---- |
+| （なし） | `void` | |
+
+- フロー
+
+1. `view.focus()` を呼ぶ
+
+キャレット位置は動かさない。実行の前に編集していた位置がそのまま残る。
+
+- 例外処理
+
+行わない。

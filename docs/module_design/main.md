@@ -42,6 +42,7 @@
 | `clearOutput` | なし | `void` | 出力領域を空にする |
 | `beginStdin` | `prompt` | `void` | 入力待ちに入る。プロンプトを出し、キャレットを立てる |
 | `commitStdin` | `text` | `void` | 入力を確定し、`stdinResult` を送る |
+| `endRun` | なし | `void` | 実行の後始末。入力のキューを捨て、フォーカスをエディタへ戻す |
 | `handleDocChanged` | なし | `void` | 文書の変化を受け、500ms のデバウンスを張り直す |
 | `onIdle` | なし | `void` | 入力停止から 500ms 後の処理。保存と構文チェックを行う |
 | `saveState` | なし | `Promise<void>` | 現在の状態を `chrome.storage.local` へ書く |
@@ -59,21 +60,28 @@
 | `currentRunId` | `string \| null` | 実行中の `runId`。遅延して届いた出力の判別に使う |
 | `latestCheckId` | `string \| null` | 最後に送った `checkId`。古い検査結果を捨てるために使う |
 | `idleTimer` | `number \| null` | 500ms デバウンスのタイマ |
+| `stdinQueue` | `string[]` | 貼り付けで確定した行のうち、まだ `input()` へ渡していないもの（[ADR 0022](../ADR/0022-queue-pasted-lines-as-stdin.md)） |
 
 ### 実行状態
 
 [ADR 0010](../ADR/0010-show-run-state-in-toolbar-status.md) に基づき、状態はステータス表示が説明し、ボタンの活性がその時点で可能な操作を示す。Figma のアートボード（[基本設計 §5.3](../design.md)）と 1 対 1 で対応する。
 
-| `state` | アートボード | 実行ボタン | 停止ボタン | 遷移の契機 |
-| ------- | ---- | ---- | ---- | ---- |
-| `initializing` | 01 初期化中 | 無効 | 無効 | 起動直後、および `replaceWorker` の直後 |
-| `ready` | 02 実行可能 | 有効 | 無効 | `ready` を受信 |
-| `running` | 03 実行中 | 無効 | 有効 | `run` を送信 |
-| `waitingInput` | 08 入力待ち | 無効 | 有効 | `stdin` を受信 |
-| `done` | 04 正常終了 | 有効 | 無効 | `done` を受信 |
-| `error` | 05 実行時エラー | 有効 | 無効 | `error` を受信 |
-| `initError` | 06 初期化失敗 | 無効 | 無効 | `initError` を受信 |
-| `restarting` | 07 停止直後 | 無効 | 無効 | 停止ボタンの押下 |
+| `state` | アートボード | ステータス文言 | 印の色 | 実行ボタン | 停止ボタン | 遷移の契機 |
+| ------- | ---- | ---- | ---- | ---- | ---- | ---- |
+| `initializing` | 01 初期化中 | Pyodide を初期化中… | `status/running` | 無効 | 無効 | 起動直後、および `replaceWorker` の直後 |
+| `ready` | 02 実行可能 | 準備完了 | `status/success` | 有効 | 無効 | `ready` を受信 |
+| `running` | 03 実行中 | 実行中… | `status/running` | 無効 | 有効 | `run` を送信 |
+| `waitingInput` | 08 入力待ち | 入力待ち | `status/running` | 無効 | 有効 | `stdin` を受信 |
+| `done` | 04 正常終了 | 準備完了 | `status/success` | 有効 | 無効 | `done` を受信 |
+| `error` | 05 実行時エラー | 準備完了 | `status/success` | 有効 | 無効 | `error` を受信 |
+| `initError` | 06 初期化失敗 | 初期化に失敗しました | `status/error` | 無効 | 無効 | `initError` を受信 |
+| `restarting` | 07 停止直後 | 停止しました。再初期化中… | `status/running` | 無効 | 無効 | 停止ボタンの押下 |
+
+文言と色は Figma の各アートボードによる（[基本設計 §5.3](../design.md)）。`status/running` は `#b45309`、`status/success` は `#17803d`、`status/error` は `#d22b2b`。
+
+**`ready` / `done` / `error` はツールバーの表示が完全に同一である。** 何が起きた直後かを語るのはツールバーではなく**出力領域の側**で、Figma は 03 に「出力を受信中…」、04 に「実行が完了しました」、07 に「実行を停止しました」を置いている。ツールバーは「いま何ができるか」だけを示し、「何が起きたか」は履歴に残す、という分担になる。
+
+3 つの状態を 1 つにまとめないのは、Figma のアートボードと 1 対 1 に保つためである。表示が同じでも、遷移の契機と直前に追記される行が違う。
 
 アートボード「09 構文エラー」は本表に含めない。**構文エラーがあっても実行ボタンは無効にしない**（[ADR 0010](../ADR/0010-show-run-state-in-toolbar-status.md)）。検査結果は遅れて届くため、連動させるとボタンの活性が入力の合間に揺れる。09 はエディタ内の下線の有無を示すものであり、ツールバーの状態ではない。
 
@@ -153,12 +161,14 @@ async function restoreState(): Promise<void>
 
 1. `chrome.storage.local.get` でレコードを 1 件読む
 2. レコードがなければ何もせず戻る（初回起動）
-3. レコードのバージョン欄を確認する
+3. レコードのバージョン欄を確認する。**既知の古い版なら現在の形へ移行する**
 4. `applyViewState(view, record)` でエディタへ復元する（`editor.js`）
+
+**保存レコードの移行は本関数が行う。** Service Worker の `onInstalled` には置かない（[service-worker.md](service-worker.md)）。移行が要るかどうかは**読んだ時点**で分かり、本関数は既にバージョン欄を見ている。Service Worker はいつでも停止するため、移行の途中で止まれば中途半端なレコードが残る。
 
 - 例外処理
 
-読み取りに失敗した場合、および**レコードのバージョンが未知の場合**は、復元を諦めて空の文書のまま始める。例外は投げない。
+読み取りに失敗した場合、および**レコードのバージョンが未知（＝現在より新しい）場合**は、復元を諦めて空の文書のまま始める。例外は投げない。新しい版のレコードをこちらの解釈で読むと、内容を取り違えたまま上書きする。
 
 復元できないことを理由に起動を止めない。エディタが開いて書き始められることの方が、前回の続きから始められることより優先される。
 
@@ -279,10 +289,16 @@ Worker からのメッセージを `type` で振り分ける。種別の文字�
 | `stdout` | `appendOutput("stdout", text)` |
 | `stderr` | `appendOutput("stderr", text)` |
 | `stdin` | `beginStdin(prompt)` し、`setState("waitingInput")` |
-| `done` | `currentRunId` を `null` にし、`setState("done")` |
-| `error` | `appendOutput("error", message + traceback)` し、`currentRunId` を `null` にして `setState("error")` |
+| `done` | `appendOutput("notice", "実行が完了しました")`、`stdinQueue` を空にし、`currentRunId` を `null` にして `setState("done")`。`endRun()` でフォーカスを戻す |
+| `error` | `appendOutput("error", message + traceback)`、`stdinQueue` を空にし、`currentRunId` を `null` にして `setState("error")`。`endRun()` でフォーカスを戻す |
 | `initError` | `appendOutput("error", message)` し、`setState("initError")` |
 | `checkResult` | `applyCheckResult(payload)` |
+
+`done` で `notice` を 1 行出すのは、**`ready` / `done` / `error` のツールバー表示が同一**であり、実行が終わったことを語れるのが出力領域しかないためである（Figma のアートボード 04）。
+
+`endRun()` は実行の後始末をまとめたもので、`stdinQueue` の破棄と、**フォーカスが出力領域の中にある場合に限った** `focusEditor(view)` の呼び出しを行う（`editor.js`）。実行中にユーザが自分でエディタを触っていた場合は、そのフォーカスを奪い返さない。
+
+**`ready` を受けたときの初回検査は、復元したコードがある場合に限る。** 空の文書では検査に意味がない。復元したコードに構文エラーがあれば、開いた直後から下線が出る。検査を見送ると、**ユーザが 1 文字打った 500ms 後に、打った場所とは無関係なところへ唐突に下線が出る**ことになり、そちらの方が因果を読み違えやすい。
 
 `ready` と `initError` は `runId` を持たないため照合しない。`checkResult` は `checkId` で照合する（`applyCheckResult` の項）。
 
@@ -320,11 +336,14 @@ function handleRunClick(): void
 1. `nextId("run")` で `runId` を採番し、`currentRunId` へ入れる
 2. `saveState()` を呼ぶ（実行時のフラッシュ。[基本設計 §2.2](../design.md)）
 3. `idleTimer` を解除する。実行中は検査を行わないため、保留中の契機を残さない
-4. `getCode(view)` でコードを取り出す
-5. `worker.postMessage({ type: RUN, runId, code })` を送る
-6. `setState("running")`
+4. `appendOutput("notice", ...)` で実行の区切りを 1 行出す（[ADR 0024](../ADR/0024-mark-run-boundary-in-output.md)）
+5. `getCode(view)` でコードを取り出す
+6. `worker.postMessage({ type: RUN, runId, code })` を送る
+7. `setState("running")`
 
-出力領域は**自動で消さない。** 消すかどうかは「未決事項」を参照。
+**出力領域は消さない。** 消すと、前回の traceback を見ながら直して実行する流れで直す根拠が失われ、`input()` で対話した履歴も実行のたびに消える。繰り返し実行したときの境目は手順 4 の区切りが示す。出力領域が空になるのはクリアボタンを押したときだけである。
+
+区切りの文言と見た目（罫線を引くか）は Figma の確定による。
 
 - 例外処理
 
@@ -359,8 +378,9 @@ function handleStopClick(): void
 
 - フロー
 
-1. `appendOutput` で停止した旨を 1 行出す
-2. `replaceWorker()` を呼ぶ
+1. `appendOutput("notice", "実行を停止しました")` で停止した旨を 1 行出す（Figma アートボード「07 停止直後」）
+2. `endRun()` を呼ぶ
+3. `replaceWorker()` を呼ぶ
 
 手順 1 を置くのは、停止すると `done` も `error` も届かず、**出力が途中で途切れたまま何の説明もなく終わる**ためである。途切れた理由が履歴に残らないと、実行が終わったのか止めたのか後から読めない。
 
@@ -398,7 +418,11 @@ function setState(next: RunState): void
 1. `state` へ `next` を代入する
 2. 表に従いステータスのインジケータとラベルを更新する
 3. 表に従い実行ボタンと停止ボタンの `disabled` を設定する
-4. `initError` の場合は再試行の導線を出す（Figma アートボード「06 初期化失敗」）
+4. `initError` の場合は**出力領域の末尾**へ再試行のブロックを追記する
+
+手順 4 の置き場所は**ツールバーではなく出力領域の中**とする（Figma アートボード「06 初期化失敗」）。エラー本体の直下に再試行ボタンと「Python の実行はできませんが、コードの編集と保存は続けられます。」を置く。押下で `replaceWorker()` を呼ぶ。
+
+ツールバーに置かない理由は 2 つある。初期化に成功した後もボタンの居場所が残ること、そして**状態ごとにツールバーの構造そのものが変わる**ことである。出力領域に置けば、エラーをインラインで出すという原則（[ADR 0011](../ADR/0011-show-errors-inline-in-output-pane.md)）の一部として収まり、再試行が「どの失敗に対するものか」も履歴の位置で分かる。
 
 - 例外処理
 
@@ -433,7 +457,9 @@ function appendOutput(kind: "stdout" | "stderr" | "error" | "prompt" | "input" |
 | `error` | Worker の `error` / `initError`、および Worker の起動失敗 |
 | `prompt` | `input(prompt)` のプロンプト（`beginStdin` から） |
 | `input` | ユーザが確定した入力行（`commitStdin` から） |
-| `notice` | 停止した旨、復元できなかった旨など UI 側の説明 |
+| `notice` | 実行の区切り、実行が完了した旨、停止した旨、復元できなかった旨など UI 側の説明 |
+
+`prompt` は `stdout` と**同じ色**、`input` は `accent/default`（`#2563eb`）とする。プロンプトはプログラムが書いたもので `stdout` と同列であり、入力はユーザが書いたものだからである。1 本の履歴を後から読むとき、**どれを自分が打った行か**が色で分かる。Figma のアートボード 08 には入力を確定した後の状態がないため、アートボードを 1 枚足す作業が残る。
 
 - 返り値一覧
 
@@ -443,12 +469,20 @@ function appendOutput(kind: "stdout" | "stderr" | "error" | "prompt" | "input" |
 
 - フロー
 
-1. `kind` に対応するクラスを付けた要素を作る
-2. `text` を**テキストとして**入れる。HTML として解釈させない
-3. 出力領域の末尾へ追加する
-4. 末尾までスクロールする
+1. `text` が 10,000 文字を超える場合は切り詰め、末尾に省略の印を付ける
+2. `kind` に対応するクラスを付けた要素を作る
+3. `text` を**テキストとして**入れる。HTML として解釈させない
+4. 出力領域の末尾へ追加する
+5. 行数が 2,000 を超えていれば、古い方から取り除く。取り除いた場合、先頭に「古い出力を省略しました」を 1 行残す
+6. 末尾までスクロールする
 
-手順 2 は必須である。`text` にはユーザコードの出力と Python の traceback が入る。文字列として扱わないと、`print("<b>")` のような出力が表示を壊す。
+手順 3 は必須である。`text` にはユーザコードの出力と Python の traceback が入る。文字列として扱わないと、`print("<b>")` のような出力が表示を壊す。
+
+手順 1 と 5 は出力の上限である（[ADR 0023](../ADR/0023-cap-output-pane-size.md)）。行数で数えられるのは本関数の 1 回の呼び出しが 1 行に対応するためで、判定は子要素の数で済む。文字数の方は、`batched` が行単位で呼ばれる以上**改行を含まない巨大な出力が 1 行として届く**ことへの備えである。
+
+**入力待ちの行（プロンプトと編集中の入力）は手順 5 の対象から外す。** プロンプトが消えると、何を聞かれているか分からないままキャレットだけが残る。
+
+省略した事実を 1 行残すのは、黙って消すと**出力の先頭が本当の先頭だと読めてしまう**ためである。
 
 - 例外処理
 
@@ -479,11 +513,14 @@ function clearOutput(): void
 
 - フロー
 
-1. 出力領域の子要素をすべて取り除く
+1. 入力待ちでなければ、出力領域の子要素をすべて取り除く
+2. 入力待ちなら、**入力中の行より前だけ**を取り除く
+
+**入力待ちの最中もクリアボタンは押せる。** 無効にすると「出力が溢れて読めないから消したい」という一番ありそうな動機を塞ぐことになる。一方でプロンプトまで消すと、何を聞かれているか分からないままキャレットだけが残るため、入力待ちの行は残す。
 
 - 例外処理
 
-行わない。入力待ちの最中に呼ばれた場合の扱いは「未決事項」を参照。
+行わない。
 
 ### beginStdin関数
 
@@ -514,10 +551,11 @@ function beginStdin(prompt: string): void
 
 - フロー
 
-1. `appendOutput("prompt", prompt)` でプロンプトを出す。空文字でも行は立てる
-2. その行の末尾を入力可能にし、キャレットを置く
-3. フォーカスを出力領域へ移す
-4. 確定のキー操作を待つ
+1. `stdinQueue` が空でなければ、先頭を取り出して `commitStdin` へ渡し、**ここで戻る**（[ADR 0022](../ADR/0022-queue-pasted-lines-as-stdin.md)）。プロンプトは出し、消費した行も `input` として残す
+2. `appendOutput("prompt", prompt)` でプロンプトを出す。空文字でも行は立てる
+3. その行に編集可能な `span` を足し、キャレットを置く
+4. フォーカスをその `span` へ移す
+5. 確定のキー操作を待つ
 
 - 例外処理
 
@@ -525,22 +563,66 @@ function beginStdin(prompt: string): void
 
 **出力領域が追記専用でなくなるのはこの瞬間だけ**である（[ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。確定すれば静的な行に戻る。
 
+#### 入力面の実装
+
+出力領域そのものは編集不可のままとし、**入力待ちの間だけ、末尾行の中に置いた `span` を `contenteditable="plaintext-only"` にする。**
+
+使い捨ての拡張（`spike/input-surface/`）で 3 案を実機で比べた結果による。
+
+| 案 | 確定済みの行を編集できないことの担保 | 判定 |
+| --- | --- | --- |
+| 出力領域全体を `contenteditable` にする | `beforeinput` で入力行の外への変更を弾く | **不可** |
+| **末尾行の `span` だけを `contenteditable` にする** | 出力領域が編集不可のまま | **採用** |
+| 末尾にインラインの `input` 要素を置く | 出力領域が編集不可のまま | 見送り |
+
+1 案目を採らないのは、**門が原理的に閉じきらない**ためである。`beforeinput` は `insertCompositionText` に対しては cancelable ではなく、`preventDefault()` しても IME の変換文字列は入る。実機でも、入力待ちでない出力領域に対して変換が成立し、**確定済みの行に文字が残った。** [ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md) が置いた「1 本の履歴として後から読める」という前提が崩れる。
+
+3 案目の `input` 要素は構造では守れるが、単一行に固定されて折り返しが効かず、出力全体をドラッグ選択してコピーしたときに入力欄の中身が落ちる。スパイクで幅を固定せざるを得なかったのがその現れである。
+
+採用案は、出力領域を編集不可に保ったまま入力用の `span` だけを開ける。折り返しも選択コピーも他の出力行と同じに揃う。
+
+#### 確定キーと IME
+
+`keydown` で `key === "Enter"` かつ `isComposing === false` かつ `keyCode !== 229` のときだけ確定する。
+
+実機では、**変換を確定する Enter は `key === "Enter"` の `keydown` として届かなかった**（`compositionend` の後、確定の Enter だけが `keyCode=13 isComposing=false` で届く）。それでも判定は残す。IME の実装差に対する保険であり、costs は 1 行である。誤れば**変換を確定しただけで入力が送信される**ため、保険の側に倒す。
+
+**修飾キーを伴う Enter（Shift / Ctrl / Alt / Meta）は無視する。** 改行も入れない。1 行 = 1 入力という対応を崩さないためである。
+
+#### EOF
+
+**入力行が空のときに限り、`Ctrl+D` を EOF として扱う**（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）。文字が入っているときは無視する。`keydown` で `preventDefault()` すれば Chrome のブックマーク追加には奪われないことを実機で確認している。
+
+#### 貼り付け
+
+`beforeinput` の `insertFromPaste` を横取りし、**素のままでは入れさせない**（[ADR 0022](../ADR/0022-queue-pasted-lines-as-stdin.md)）。CRLF を LF に正規化して分割し、改行で終わっている行はすべて確定、終わっていない最後の行だけを入力行に残す。余った行は `stdinQueue` へ積む。
+
+実機では、横取りしないと `"こんにちは\nこんにちは\nこんにちは\nこんにちは\n\n"` が改行を含んだ 1 つの値として確定した。**`input()` の返り値に改行が含まれないことは Python の約束**であり、破ると後続の `int()` などが意図しない形で壊れる。
+
+#### 入力履歴
+
+**持たない。** 上下キーは拾わない。
+
+REPL ではなくプログラムへの入力であり、同じ値を再入力する場面は REPL ほど多くない。持てば履歴の寿命（1 回の実行の間か、パネルを開いている間か）という判断が増え、上下キーを奪えば入力行でのキャレット移動とも衝突する。**足す方が剥がすより容易**なので、必要と分かった時点で足す。
+
 ### commitStdin関数
 
 - シグネチャ
 ```js
-function commitStdin(text: string): void
+function commitStdin(text: string | null): void
 ```
 
 - 概要
 
 入力を確定し、`stdinResult` を Worker へ返す。Worker 側では `run_sync` が値を受け取り、`input()` から実行が再開する（[基本設計 §3.2](../design.md)）。
 
+`text` が `null` のときは EOF を表し、Worker 側の `input()` は `EOFError` を送出する（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）。
+
 - 引数一覧
 
 | 引数名 | 型  | 必須 | 内容 |
 | ------ | --- | ---- | ---- |
-| `text` | `string` | ○ | 確定した 1 行。末尾の改行は含まない |
+| `text` | `string \| null` | ○ | 確定した 1 行。末尾の改行は含まない。**EOF の場合は `null`** |
 
 - 返り値一覧
 
@@ -551,13 +633,51 @@ function commitStdin(text: string): void
 - フロー
 
 1. 入力中の行を編集不可にし、キャレットを外す
-2. `appendOutput("input", text)` 相当の形で、確定した入力を静的な行として履歴に残す
+2. `text` が文字列なら `appendOutput("input", text)` 相当の形で、確定した入力を静的な行として履歴に残す。`null`（EOF）なら `appendOutput("notice", "EOF を送信しました")` を出す
 3. `worker.postMessage({ type: STDIN_RESULT, runId: currentRunId, text })` を送る
 4. `setState("running")` で実行中へ戻す
+
+手順 2 で EOF の行を残すのは、**何も残さないと履歴を読み返したときに実行が中断した理由が消える**ためである。`EOFError` の traceback だけが唐突に現れることになる。
 
 - 例外処理
 
 `state` が `waitingInput` でないときに呼ばれた場合は何もせず戻る。確定の直前に停止ボタンが押された経路があり得る。その場合 `currentRunId` は既に `null` であり、送り先の Worker も破棄されている。
+
+### endRun関数
+
+- シグネチャ
+```js
+function endRun(): void
+```
+
+- 概要
+
+実行の後始末をまとめる。`done` と `error` の受信時、および停止時に呼ぶ。
+
+- 引数一覧
+
+| 引数名 | 型  | 必須 | 内容 |
+| ------ | --- | ---- | ---- |
+| （なし） |     |      |      |
+
+- 返り値一覧
+
+| 返り値名 | 型  | 内容 |
+| -------- | --- | ---- |
+| （なし） | `void` | |
+
+- フロー
+
+1. `stdinQueue` を空にする
+2. フォーカスが出力領域の中にあれば `focusEditor(view)` を呼ぶ（`editor.js`）
+
+手順 1 は必須である。**キューが実行をまたいで残ると、次の実行が身に覚えのない値で進む**（[ADR 0022](../ADR/0022-queue-pasted-lines-as-stdin.md)）。
+
+手順 2 の条件が要るのは、実行中にユーザが自分でエディタを触っている場合があるためである。そのフォーカスを奪い返す理由はない。入力の確定時ではなく実行の終了時に戻すのは、`input()` がループで繰り返される場合に**フォーカスが往復する**のを避けるためである。
+
+- 例外処理
+
+行わない。
 
 ### handleDocChanged関数
 
@@ -776,7 +896,9 @@ function nextId(prefix: string): string
 - フロー
 
 1. モジュール内の連番を 1 進める
-2. `prefix` と連番を繋いだ文字列を返す
+2. `prefix` と連番を `-` で繋いだ文字列を返す（`run-1` / `check-1` の形）
+
+採番を本モジュールに置くのは、**発行するのが UI 側だけ**だからである。`protocol.js` は種別と欄名の定義に留め、値の生成を持たない（[protocol.md](protocol.md)）。UUID のような衝突しない形式は要らない。一意性はサイドパネルの文書が生きている間だけ保てればよく、パネルを開き直せば Worker も作り直される。
 
 一意性はサイドパネルの文書が生きている間だけ保てればよい。パネルを開き直せば Worker も作り直され、古い識別子を持つ相手は存在しない。
 
@@ -784,16 +906,3 @@ function nextId(prefix: string): string
 
 行わない。
 
-## 未決事項
-
-- **出力領域の入力面をどう実装するか。** [ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md) は「専用の入力欄を設けず出力領域を入力面とする」と決めているが、実現手段を決めていない。出力領域全体を `contenteditable` にする案、入力待ちの間だけ末尾行を `contenteditable` にする案、末尾に透明な `input` 要素を重ねる案がある。**確定済みの行を編集できてしまわないこと**と、**IME が正しく動くこと**の両立が条件になる。
-- **入力の確定キーと IME の扱い。** Enter で確定するが、日本語入力では Enter が変換の確定にも使われる。`compositionstart` / `compositionend` を見て変換中の Enter を確定と区別する必要がある。**この区別を誤ると、変換を確定しただけで入力が送信される。** 具体的な判定方法を決めていない。
-- **`input()` に対する EOF（`Ctrl+D`）を送れるようにするか。** [ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md) が実装時の課題として残したもの。UI 側のキー操作と、`stdinResult` での表し方の両方を決める必要がある（`pyodide-worker.md` の未決事項と対）。
-- **入力履歴（上下キーでの呼び出し）を持つか。** 同じく [ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md) の課題。持つ場合、履歴の寿命（1 回の実行の間か、パネルを開いている間か）も決める必要がある。
-- **確定した入力行の見せ方。** 標準出力と同じ色にするか区別するか（[ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md) の課題）。`appendOutput` の `kind` は `input` と `prompt` を分けてあるが、実際に色を分けるかは Figma のアートボード「08 入力待ち」の確定待ち。
-- **実行開始時に出力領域を消すか。** 本書では消さない前提を置いた。[ADR 0011](../ADR/0011-show-errors-inline-in-output-pane.md) の追記の原則には沿うが、実行を繰り返すと前回の結果と混ざって境目が読めなくなる。消す、区切り線を入れる、何もしないの 3 案がある。決めていない。
-- **出力領域の上限。** 無限ループで `print` し続けるコードは容易に書ける。行数や文字数の上限を設けるか、設ける場合に古い方から捨てるかを決めていない。**上限がないとパネルが操作不能になる**が、これは Worker の分離（[ADR 0005](../ADR/0005-run-pyodide-in-web-worker.md)）では防げない。出力は UI スレッドの DOM に積まれるためである。
-- **入力待ちの最中にクリアボタンを押せるか。** 押せる場合、入力中の行ごと消えることになる。押せなくする、入力行だけ残す、押させて入力も捨てる（実行は入力待ちのまま）の案がある。決めていない。
-- **ステータスのラベル文言。** [ADR 0010](../ADR/0010-show-run-state-in-toolbar-status.md) は「状態を表示する」ことを決めたが、8 つの状態それぞれの文言は Figma の確定待ち。`done` と `ready` はボタンの活性が同じであり、**文言だけが両者を区別する**ため、ここの詰めが効く。
-- **`initError` からの再試行の導線。** Figma アートボード「06 初期化失敗」は「再試行を提示」としているが、ボタンの置き場所（ツールバーか出力領域の中か）が決まっていない。再試行の実体は `replaceWorker()` になる。
-- **`ready` を受けたときの初回検査。** 復元したコードに構文エラーがあった場合、ユーザが何も打たないと `handleDocChanged` が走らず検査の契機が来ない。本書では `ready` の受信時に一度検査する前提を置いたが、**開いた直後にいきなり下線が出る**ことの是非を決めていない。

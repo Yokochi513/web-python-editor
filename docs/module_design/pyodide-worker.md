@@ -28,9 +28,9 @@ Pyodide の実体は拡張パッケージ内に同梱したものをローカル
 | `handleRun` | `payload` | `Promise<void>` | ユーザコードを実行し、`done` または `error` を送る |
 | `handleCheck` | `payload` | `void` | `compile()` で構文を検査し、`checkResult` を送る |
 | `handleStdinResult` | `payload` | `void` | 待機中の `askLine` の Promise を解決する |
-| `askLine` | `prompt` | `Promise<string>` | UI へ `stdin` を送り、応答を待つ |
+| `askLine` | `prompt` | `Promise<string \| null>` | UI へ `stdin` を送り、応答を待つ。`null` は EOF |
 | `toErrorPayload` | `err` | `{ message, traceback }` | 例外を `error` メッセージのペイロードへ変換する |
-| `toDiagnostics` | `err`, `code` | `Diagnostic[]` | `SyntaxError` をエディタ用の診断へ変換する |
+| `toDiagnostics` | `err` | `SyntaxDiagnostic[]` | `SyntaxError` を `checkResult` に載せる形へ写す |
 
 モジュールのトップレベルでは `self.onmessage` に `handleMessage` を登録し、続けて `init()` を呼ぶ。**初期化は UI からの指示を待たずに自動で始める**（[基本設計 §3.1](../design.md) の手順 3）。
 
@@ -40,7 +40,7 @@ Pyodide の実体は拡張パッケージ内に同梱したものをローカル
 | ------ | --- | ---- |
 | `pyodide` | `PyodideInterface \| null` | 初期化済みのインスタンス。初期化前と初期化失敗時は `null` |
 | `currentRunId` | `string \| null` | 実行中の `runId`。`stdout` / `stderr` / `stdin` に載せる |
-| `pendingStdin` | `((text: string) => void) \| null` | 入力待ちの `askLine` が持つ resolve |
+| `pendingStdin` | `((text: string \| null) => void) \| null` | 入力待ちの `askLine` が持つ resolve |
 
 `pendingStdin` を Map ではなく単一の値で持つのは、**1 つの実行の中で `input()` が並行することはない**ためである。Python 側は `run_sync` で 1 件ずつ直列に待つ。
 
@@ -74,14 +74,34 @@ async function init(): Promise<void>
 
 - フロー
 
-1. `loadPyodide({ indexURL })` を呼ぶ。`indexURL` は同梱した `vendor/pyodide/` を `import.meta.url` からの相対で解決する
+1. `loadPyodide({ indexURL })` を呼ぶ。`indexURL` は `new URL("../vendor/pyodide/", import.meta.url)` で解決する
 2. `pyodide.setStdout({ batched: (text) => post(STDOUT, { runId: currentRunId, text }) })` を設定する
 3. `pyodide.setStderr({ ... })` を同様に設定する
 4. `installInput(pyodide)` を呼ぶ
-5. モジュール変数 `pyodide` へ代入する
-6. `ready` を送る
+5. `await pyodide.runPythonAsync("pass")` で暖機する（[ADR 0025](../ADR/0025-warm-up-python-before-ready.md)）
+6. モジュール変数 `pyodide` へ代入する
+7. `ready` を送る
 
 `setStdout` の `batched` は行単位で呼ばれる。まとめて送らず逐次送るのは、長時間実行中に画面が無反応に見える状態を避けるためである（[ADR 0005](../ADR/0005-run-pyodide-in-web-worker.md)）。
+
+`raw`（文字単位）へは切り替えない。`print("hello")` だけで `postMessage` が 6 回になり、`print` を続けるコードでは **UI スレッドがメッセージの処理で埋まる。** 出力領域の上限（[ADR 0023](../ADR/0023-cap-output-pane-size.md)）は積まれた DOM を抑えるものであって、メッセージの流量は抑えない。
+
+代わりに **`sys.stdout.flush()` を 2 箇所で呼ぶ。** `installInput` が入れる `_input` の中と、`handleRun` が `done` / `error` を送る直前である。`batched` は改行のほか flush でも呼ばれるため、これで `print("名前: ", end="")` のような**改行を伴わないプロンプトが入力待ちの前に出ない**という症状が消える。粒度を上げずに、遅れて困る場面だけを潰す。
+
+手順 5 の暖機は手順 2〜4 の後に置く。**差し替えを済ませる前に暖機すると、暖める経路が本番と違うものになる。** 暖機自体が失敗した場合は `initError` とせず、そのまま `ready` を送る（[ADR 0025](../ADR/0025-warm-up-python-before-ready.md)）。
+
+手順 1 の `indexURL` は `dist/` の配置に依存する。`build.js`（[基本設計 §7](../design.md)）は次の構成でコピーする。
+
+```
+dist/
+├── manifest.json
+├── background/service-worker.js
+├── sidepanel/{sidepanel.html, main.js, style.css}
+├── worker/pyodide-worker.js
+└── vendor/pyodide/
+```
+
+Worker は `dist/worker/` に置かれるため、`vendor/pyodide/` は 1 段上になる。
 
 - 例外処理
 
@@ -125,14 +145,23 @@ function installInput(pyodide: PyodideInterface): void
 
 ```python
 import builtins
+import sys
 from pyodide.ffi import run_sync
 import js
 
 def _input(prompt=""):
-    return run_sync(js.askLine(str(prompt)))
+    sys.stdout.flush()
+    line = run_sync(js.askLine(str(prompt)))
+    if line is None:
+        raise EOFError("EOF when reading a line")
+    return line
 
 builtins.input = _input
 ```
+
+`line is None` は EOF を表す（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）。UI が `stdinResult` の `text` に `null` を載せて返したときに起こる。メッセージ文言を CPython と同じにするのは、ユーザが手元の Python で見るものと揃えるためである。
+
+`sys.stdout.flush()` は、`print("名前: ", end="")` のように**改行を伴わないプロンプト**を入力待ちの前に出し切るために要る。`batched` は行単位で呼ばれるため、flush しないと問いかけが画面に出ないまま入力待ちになる。
 
 **プロンプトを `print` で標準出力へ流さない。** プロンプト文字列は `askLine` に渡され、`stdin` メッセージのペイロードとして UI へ届く（[ADR 0016](../ADR/0016-replace-builtins-input-instead-of-setstdin.md)）。UI 側は 1 回の受信でプロンプトの表示とキャレットの設置をまとめて処理できる。
 
@@ -208,11 +237,19 @@ async function handleRun(payload: { runId: string, code: string }): Promise<void
 
 - フロー
 
-1. `currentRunId` に `payload.runId` を代入する
-2. `await pyodide.runPythonAsync(payload.code)` を呼ぶ
-3. 正常に戻れば `done` に `{ runId }` を載せて送る
-4. 例外が出れば `toErrorPayload(err)` の結果を `error` に載せて送る
-5. `currentRunId` を `null` に戻し、`pendingStdin` も `null` に戻す
+1. `currentRunId` が `null` でなければ**拒む**（下記）
+2. `currentRunId` に `payload.runId` を代入する
+3. `await pyodide.runPythonAsync(payload.code)` を呼ぶ
+4. `sys.stdout.flush()` 相当を行い、未確定の出力を出し切る
+5. 正常に戻れば `done` に `{ runId }` を載せて送る
+6. 例外が出れば `toErrorPayload(err)` の結果を `error` に載せて送る
+7. `currentRunId` を `null` に戻し、`pendingStdin` も `null` に戻す
+
+**実行中に次の `run` が届いた場合は受け付けず、その `runId` に対して `error` を 1 件返す。** Pyodide はシングルスレッドで、並行して走らせることはそもそもできない。
+
+キューに積む案は採らない。実行が終わった瞬間に**次が勝手に走り出す**ことになり、UI 側はその時点で実行ボタンを有効に戻している。黙って捨てる案も採らない。`done` も `error` も届かないまま、UI が停止ボタンだけ有効な状態で固まる。`pyodide` が `null` のときに `error` を返すのと同じ扱いである（`handleMessage` の項）。
+
+UI 側は実行中に実行ボタンを無効にするため、通常この経路は通らない。**その抑止は UI の内部事情であり、本モジュールが依存してよい前提ではない。**
 
 実行中に `input()` が呼ばれると `askLine` が `stdin` を送り、`run_sync` がそこで待つ。**Worker のスレッドは止まらない**ため、待機中も `handleMessage` は生きており、`stdinResult` を受け取って実行を再開できる（[基本設計 §3.2](../design.md)）。
 
@@ -317,7 +354,7 @@ resolve を呼ぶ前に `pendingStdin` を空にするのは、resolve から同
 
 - シグネチャ
 ```js
-function askLine(prompt: string): Promise<string>
+function askLine(prompt: string): Promise<string | null>
 ```
 
 - 概要
@@ -336,7 +373,7 @@ UI へ `stdin` を送り、応答が返るまで解決しない Promise を返�
 
 | 返り値名 | 型  | 内容 |
 | -------- | --- | ---- |
-| （なし） | `Promise<string>` | UI が確定した 1 行。`handleStdinResult` が解決する |
+| （なし） | `Promise<string \| null>` | UI が確定した 1 行。**EOF の場合は `null`**（[ADR 0021](../ADR/0021-represent-eof-as-null-stdin-result.md)）。`handleStdinResult` が解決する |
 
 - フロー
 
@@ -379,60 +416,65 @@ UI は `message` と `traceback` を出力領域にインラインで表示す�
 
 1. `err` が `PythonError` かを判定する
 2. `PythonError` なら traceback と要約行を分けて返す
-3. そうでなければ `{ message: String(err), traceback: "" }` を返す
+3. traceback から**ユーザコード以外のフレームを取り除く**（下記）
+4. そうでなければ `{ message: String(err), traceback: "" }` を返す
+
+#### 内部フレームを取り除く
+
+ユーザコードは `runPythonAsync` 経由で実行されるため、traceback には `/lib/python*.zip/_pyodide/_base.py` のようなフレームが混ざる。加えて `builtins.input` の差し替え（[ADR 0016](../ADR/0016-replace-builtins-input-instead-of-setstdin.md)）により、`input()` 由来の例外には `_input` と `run_sync` のフレームが入る。**そのまま見せると、ユーザは自分の書いていないファイルの行を読むことになる。**
+
+基準は 1 つ。**`File "..."` 行のうち、ファイル名が `<exec>` でないものを、続くソース行ごと落とす。** 先頭の `Traceback (most recent call last):` と末尾の要約行は残す。`<exec>` は `runPythonAsync` がユーザコードに付けるファイル名である。
+
+結果は Figma のアートボード「05 実行時エラー」が示す形と一致する。
+
+```
+Traceback (most recent call last):
+  File "<exec>", line 7, in <module>
+ZeroDivisionError: division by zero
+```
+
+**すべてのフレームが落ちる場合は、削らず元の traceback をそのまま送る。** ユーザコードの外だけで起きた例外がこれに当たる。削った結果が要約行だけになると、原因を追う手がかりがゼロになる。
 
 - 例外処理
 
 行わない。変換に失敗し得る入力を受けても、`String(err)` に落として必ず値を返す。**エラーの整形でエラーを出すと、元の失敗がユーザに届かなくなる。**
 
-traceback に含まれる Pyodide 内部のフレームの扱いは「未決事項」を参照。
-
 ### toDiagnostics関数
 
 - シグネチャ
 ```js
-function toDiagnostics(err: PythonError, code: string): Diagnostic[]
+function toDiagnostics(err: PythonError): SyntaxDiagnostic[]
 ```
 
 - 概要
 
-`compile()` が投げた `SyntaxError` を、エディタが下線とツールチップで表示できる診断へ変換する。
+`compile()` が投げた `SyntaxError` を、`checkResult` に載せる形へ写す（[基本設計 §4](../design.md)）。
 
-`SyntaxError` は行番号と桁で位置を示すが、CodeMirror の `Diagnostic` は**文書先頭からのオフセット**（`from` / `to`）で位置を表す。両者の橋渡しを本関数が担う。変換に必要な行ごとの長さは `code` から得られるため、**この変換は Worker 側で完結する。**
+**位置は行番号と桁のまま送る。** 文書先頭からのオフセットへの変換と、下線をどこまで引くか（`to`）の判断は `editor.js` が行う（[ADR 0020](../ADR/0020-send-diagnostics-as-line-column.md)）。
+
+Worker 側で `Diagnostic` を組み立てれば変換は完結するが、**Worker が UI 側の描画ライブラリの型に合わせる**依存の向きになる。加えて、変換に使うべき現在の文書を持っているのは UI 側だけである。本関数が見る `code` は検査を要求した時点のスナップショットにすぎず、結果が届くまでに編集は進んでいる。範囲の丸めと変換は同じ側に置く。
 
 - 引数一覧
 
 | 引数名 | 型  | 必須 | 内容 |
 | ------ | --- | ---- | ---- |
 | `err` | `PythonError` | ○ | `compile()` が投げた `SyntaxError` |
-| `code` | `string` | ○ | 検査対象のコード。行頭オフセットの算出に使う |
 
 - 返り値一覧
 
 | 返り値名 | 型  | 内容 |
 | -------- | --- | ---- |
-| `diagnostics` | `Diagnostic[]` | `{ from, to, severity: "error", message }` の配列。要素は最大 1 件 |
+| `diagnostics` | `SyntaxDiagnostic[]` | `{ line, column, endLine, endColumn, message }` の配列。要素は最大 1 件 |
 
 - フロー
 
-1. `SyntaxError` から `lineno` / `offset` / `msg` を取り出す
-2. `code` を改行で分け、`lineno` 行目の行頭オフセットを求める
-3. 行頭オフセットに `offset` を足して `from` を得る
-4. `to` を求める（範囲の決め方は「未決事項」）
-5. `from` / `to` を `0` 以上 `code.length` 以下に丸める
-6. 1 件の配列にして返す
+1. `SyntaxError` から `lineno` / `offset` / `end_lineno` / `end_offset` / `msg` を取り出す
+2. 欠けている `end_lineno` / `end_offset` は `null` とする
+3. 1 件の配列にして返す
+
+`code` を参照しなくなったため、引数から外している。
 
 - 例外処理
 
-`lineno` や `offset` が欠けている `SyntaxError` があり得る。その場合は例外とせず、位置を文書先頭（`from = 0`, `to = 0`）に丸めて `message` だけを届ける。**位置が分からないことは、エラーを伝えないことの理由にならない。**
+`lineno` や `offset` が欠けている `SyntaxError` があり得る。その場合は例外とせず、`line` と `column` を `1` として `message` だけを届ける。**位置が分からないことは、エラーを伝えないことの理由にならない。** 受け取った `editor.js` 側は文書先頭に下線を引く。
 
-## 未決事項
-
-- **`checkResult` の `diagnostics` の要素の形。** [基本設計 §4](../design.md) は「最大 1 件」としか定めていない。本書では CodeMirror の `Diagnostic`（`{ from, to, severity, message }`）をそのまま Worker から送る前提を置いているが、**Worker が UI 側の描画ライブラリの型に合わせる**という依存の向きになる。行・桁のまま送って UI 側で変換する案もある。決めていない。
-- **`toDiagnostics` の `to` の決め方。** `SyntaxError` は範囲ではなく 1 点を示す。行末までを範囲にするか、該当トークンの末尾までにするか、`from + 1` にするかで下線の見え方が変わる。`SyntaxError` の `end_lineno` / `end_offset` が使える場合もあるが、常に入っているとは限らない。決めていない。
-- **実行中に次の `run` が届いた場合の扱い。** UI 側は実行中は実行ボタンを無効にするため通常は届かない。届いた場合に拒むか、並行して走らせるか（Pyodide はシングルスレッドのため実質的に不可）、キューに積むかを決めていない。
-- **`traceback` に含まれる Pyodide 内部のフレームを削るか。** ユーザコードは `runPythonAsync` 経由で実行されるため、traceback には `/lib/python*.zip/_pyodide/_base.py` などユーザに関係のないフレームが混ざる。加えて、`builtins.input` の差し替え（[ADR 0016](../ADR/0016-replace-builtins-input-instead-of-setstdin.md)）により `input()` 由来の例外には `_input` と `run_sync` のフレームが入る。**そのまま見せると、ユーザは自分の書いていないファイルの行を読むことになる。** 削るかどうか、削る場合の基準を決めていない。
-- **`input()` に対する EOF（`Ctrl+D`）を送れるようにするか。** [ADR 0012](../ADR/0012-implement-stdin-as-terminal-with-jspi.md) が実装時の課題として残したもの。送れるようにする場合、`stdinResult` に EOF を表す値をどう載せるか（`text` を `null` にするか、別の欄を足すか）と、`askLine` の側で `EOFError` をどう起こすかを決める必要がある。
-- **`stdout` / `stderr` の `batched` の粒度。** `batched` は行単位で呼ばれるため、`print(..., end="")` を繰り返すコードや、改行を含まない長い出力では通知が遅れる。`raw` に切り替えて文字単位にするとメッセージ数が跳ね上がる。現行の `batched` のままでよいかを決めていない。
-- **`indexURL` が指すパス。** [基本設計 §7](../design.md) は「コピー先のパスを Worker の読み込みパスと一致させる」とのみ定めており、`dist/` 内の配置が確定していない。本書では `import.meta.url` からの相対で解決する前提を置いているが、実際の相対段数はビルド定義（`build.js`）の確定待ち。
-- **`READY` の前に Python の暖機を行うか。** `loadPyodide` 自体の所要は実機で **1,423ms**（version 314.0.7、`spike/lifecycle-check/`、2026-09-15）。その完了直後は最初の `runPythonAsync` に追加のコストがかかる可能性がある。`ready` を送る前に空のコードを一度実行して均すかどうかを決めていない。[基本設計 §9](../design.md) の検証項目（初期化コスト）と併せて実測が要る。

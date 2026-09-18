@@ -85,13 +85,16 @@ Pyodide の実体（`pyodide.asm.wasm`、`python_stdlib.zip` 等）は拡張パ�
 2. UI が Worker を生成する
 3. Worker が Pyodide の初期化を開始する
 4. **初期化の完了を待たずに、エディタは編集可能な状態で表示する。** 実行ボタンのみ無効にしておく
-5. 初期化完了時、Worker が `ready` を送り、UI が実行ボタンを有効化する
+5. Worker が `runPythonAsync` を一度空打ちして暖機する（[ADR 0025](ADR/0025-warm-up-python-before-ready.md)）
+6. 暖機まで終えた時点で Worker が `ready` を送り、UI が実行ボタンを有効化する
 
 Pyodide の初期化は数秒単位のコストがかかるため、エディタ表示と初期化を分離する（[ADR 0004](ADR/0004-use-pyodide-as-python-runtime.md)）。
 
+手順 5 は、最初の実行にかかる追加のコストを `ready` の前に隠すためのものである。暖機しなければ同じ待ちが**実行ボタンを押した後の無反応**として現れる。暖機に失敗しても `initError` とはせず、そのまま `ready` を送る。
+
 ### 3.2 実行
 
-1. UI が実行ボタンを無効化し、停止ボタンを有効化する
+1. UI が実行ボタンを無効化し、停止ボタンを有効化し、**出力領域へ実行の区切りを 1 行追記する**（[ADR 0024](ADR/0024-mark-run-boundary-in-output.md)）
 2. UI が `run` メッセージでコードを Worker へ送る
 3. Worker が実行し、標準出力・標準エラーを**逐次** `stdout` / `stderr` で UI へ送る
 4. UI は受信するたびに出力領域へ追記する
@@ -99,6 +102,10 @@ Pyodide の初期化は数秒単位のコストがかかるため、エディタ
 6. UI がボタンの状態を戻す
 
 出力をまとめて送らないのは、長時間実行中に画面が無反応に見える状態を避けるためである（[ADR 0005](ADR/0005-run-pyodide-in-web-worker.md)）。
+
+出力領域は実行の開始時にも**消さない。** 前回の traceback を見ながら直して実行する流れで、直す根拠が消えるためである。繰り返し実行したときの境目は手順 1 の区切りが示す。
+
+**実行中・入力待ちの間もエディタは編集可能である**（[ADR 0026](ADR/0026-keep-editor-editable-while-running.md)）。実行されるのは `run` を送った時点のコードであり、以降の編集は次の実行から反映される。読み取り専用にすると、長い実行の間は「書くために実行を捨てる」しかなくなる。
 
 #### 入力待ち
 
@@ -109,6 +116,10 @@ Pyodide の初期化は数秒単位のコストがかかるため、エディタ
 3. ユーザが 1 行入力して確定する
 4. UI が入力をそのまま出力領域へ残し、`stdinResult` で Worker へ返す
 5. Worker が実行を再開し、以降は §3.2 の 3 以降に戻る
+
+**入力を打ち切る手段として EOF を持つ。** 入力行が空のまま `Ctrl+D` を押すと、UI は `stdinResult` の `text` を `null` として返し、Worker 側の `input()` が `EOFError` を送出する（[ADR 0021](ADR/0021-represent-eof-as-null-stdin-result.md)）。EOF がないと、行を読み尽くすまで回るコードから抜ける手段が停止ボタンだけになる。
+
+**複数行を貼り付けた場合、改行は入力の確定として解釈する**（[ADR 0022](ADR/0022-queue-pasted-lines-as-stdin.md)）。先頭の行がいま待っている `input()` へ渡り、残りはキューに積まれて次の `stdin` で消費される。キューが残っている間、手順 2 と 3 は省かれる。キューは実行の終了と停止で捨てる。
 
 Worker は JSPI のスタックスイッチングによって待つ。**スレッドを止めるわけではない**ため、待機中も Worker のメッセージ受信は生きており、応答は通常の `postMessage` で渡せる。この経路を成立させるため、ユーザコードの実行は `pyodide.runPythonAsync` を通す。
 
@@ -132,8 +143,10 @@ Pyodide はシングルスレッドで動作するため、実行中のユーザ
 
 1. 入力が止まってから 500ms 後、UI が `check` でコードを Worker へ送る（コードの保存と同じ契機、§2.2）
 2. Worker が `compile(code, "<editor>", "exec")` を呼ぶ。**ユーザコードは実行しない**
-3. Worker が `checkResult` で診断を返す
-4. UI がエディタ内に下線とツールチップで表示する
+3. Worker が `checkResult` で診断を返す。位置は**行番号と桁のまま**載せる（[ADR 0020](ADR/0020-send-diagnostics-as-line-column.md)）
+4. UI が位置を文書先頭からのオフセットへ変換し、エディタ内に下線とツールチップで表示する
+
+手順 3 で CodeMirror の `Diagnostic` を組み立てないのは、**Worker が UI 側の描画ライブラリの型に合わせる**依存の向きを避けるためである。変換に使うべき現在の文書を持っているのも UI 側だけであり、範囲の丸めと変換は同じ側に置く。
 
 CPython は最初の構文エラーで解析を止めるため、**一度に得られる診断は最大 1 件**である。
 
@@ -150,7 +163,7 @@ CPython は最初の構文エラーで解析を止めるため、**一度に得�
 | type | ペイロード | 意味 |
 | --- | --- | --- |
 | `run` | `{ runId, code }` | コードの実行要求 |
-| `stdinResult` | `{ runId, text }` | `stdin` への応答（確定した 1 行） |
+| `stdinResult` | `{ runId, text }` | `stdin` への応答。`text` は確定した 1 行（改行を含まない）。**EOF の場合は `null`**（[ADR 0021](ADR/0021-represent-eof-as-null-stdin-result.md)） |
 | `check` | `{ checkId, code }` | 構文チェックの要求（実行は伴わない） |
 
 ### Worker → UI
@@ -166,7 +179,17 @@ CPython は最初の構文エラーで解析を止めるため、**一度に得�
 | `initError` | `{ message }` | Pyodide の初期化失敗 |
 | `checkResult` | `{ checkId, diagnostics }` | 構文チェックの結果。`diagnostics` は最大 1 件 |
 
-`runId` は実行ごとの識別子。Worker を破棄せず連続実行した場合に、遅れて届いた出力を破棄済みの実行のものと判別するために用いる。
+`runId` は実行ごとの識別子。Worker を破棄せず連続実行した場合に、遅れて届いた出力を破棄済みの実行のものと判別するために用いる。`runId` / `checkId` を採番するのは UI 側だけである。
+
+`diagnostics` の要素は次の形とする（[ADR 0020](ADR/0020-send-diagnostics-as-line-column.md)）。いずれも `SyntaxError` の属性をそのまま写したもので、**CodeMirror の語彙を含まない。**
+
+| 欄 | 内容 |
+| --- | --- |
+| `line` | `lineno`。1 始まり |
+| `column` | `offset`。1 始まり |
+| `endLine` | `end_lineno`。無い場合は `null` |
+| `endColumn` | `end_offset`。無い場合は `null` |
+| `message` | `msg` |
 
 ## 5. 画面レイアウト
 
@@ -202,6 +225,14 @@ stdout / stderr / エラーを**届いた順に追記**する。種別ごとの�
 ここに出るのは**実行して得られた結果**に限る。実行前に分かる構文エラーはエディタ内に表示し（§3.4）、この領域には出さない。
 
 この領域は**入力面も兼ねる**（[ADR 0012](ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。`stdin` を受け取ると末尾にキャレットが立ってフォーカスを受け取り、確定した入力はそのまま同じ流れに残る。入力用の欄を別に設けないのは、プロンプト・入力・その結果の前後関係を 1 本の履歴として読めるようにするためで、追記の原則はここでも変わらない。
+
+実行の区切り、停止した旨、復元できなかった旨といった UI 側の説明もこの流れに混ぜる（[ADR 0024](ADR/0024-mark-run-boundary-in-output.md)）。**この領域が消えるのはクリアボタンを押したときだけ**とし、自動で消える経路を作らない。
+
+### 出力の上限
+
+追記には上限を設ける（[ADR 0023](ADR/0023-cap-output-pane-size.md)）。**2,000 行**を超えたら古い方から取り除き、省略した旨を先頭に 1 行残す。改行を含まない巨大な出力に備え、**1 行あたり 10,000 文字**でも切り詰める。入力待ちの行は切り詰めの対象から外す。
+
+上限がないと、`while True: print(...)` のようなコードでパネルの操作が成り立たなくなる。**出力は UI スレッドの DOM に積まれるため、Worker の分離（[ADR 0005](ADR/0005-run-pyodide-in-web-worker.md)）ではこれを防げない。** 停止ボタンを押せなくなることは、Worker を分離した目的そのものが失われることを意味する。
 
 ### 5.3 画面設計ファイル
 
@@ -296,4 +327,14 @@ Pyodide の wasm / zip は**バンドル対象から除外**し、コピー先�
 
 設計上の未決定事項は現時点でない。新たに生じた場合はここに挙げ、決定した時点で ADR を起こして本ドキュメントへ反映する。
 
-本ドキュメントに挙げていた実装時の検証項目はすべて解消した（[ADR 0016](ADR/0016-replace-builtins-input-instead-of-setstdin.md) / [ADR 0019](ADR/0019-flush-on-visibilitychange-hidden.md)）。モジュール単位で残る未決事項は各モジュールの設計書（[docs/module_design/](module_design/)）に挙げる（[ADR 0017](ADR/0017-limit-adr-scope-to-basic-design.md)）。
+本ドキュメントに挙げていた実装時の検証項目はすべて解消した（[ADR 0016](ADR/0016-replace-builtins-input-instead-of-setstdin.md) / [ADR 0019](ADR/0019-flush-on-visibilitychange-hidden.md)）。
+
+モジュール設計書（[docs/module_design/](module_design/)）に挙げていた未決事項 31 件も 2026-09-15 にすべて決定し、各設計書の本文へ書き直した（[ADR 0017](ADR/0017-limit-adr-scope-to-basic-design.md) の運用による）。うち 7 件は本ドキュメントの記述を変えるため ADR 0020〜0026 として記録している。
+
+設計以外で残っている作業は画面設計の側にある（[ADR 0008](ADR/0008-manage-screen-design-in-figma.md)）。
+
+| 対象 | 内容 |
+| --- | --- |
+| `syntax/comment` トークン | 未定義。コメントの色が決まらないとハイライトを組めない |
+| アートボード 08 | 入力を確定した後の状態（`input` 行の見え方）がない |
+| アートボード 03 / 04 | 実行の区切り行（[ADR 0024](ADR/0024-mark-run-boundary-in-output.md)）を含む状態がない |
