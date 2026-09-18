@@ -102,6 +102,20 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 | [0029](docs/ADR/0029-show-indent-depth-with-colored-guides.md) | インデントの深さを、色の変わる縦線で示す | 採用 |
 | [0030](docs/ADR/0030-design-the-icon-as-stair-stepped-bars.md) | アイコンは段づけした 4 本の線とする | 採用 |
 | [0031](docs/ADR/0031-write-tests-with-node-test-runner.md) | 自動テストは `node:test` で書き、DOM を要さない範囲に限る | 採用 |
+| [0032](docs/ADR/0032-distribute-as-a-zip-built-in-repo.md) | 配布物は `dist/` の ZIP とし、組み立ても自前で行う | 採用 |
+
+## インストール
+
+Chrome ウェブストアには未登録。いまは手元で読み込んで使う。
+
+1. `npm install && npm run build`
+2. `chrome://extensions` を開き、デベロッパーモードを ON
+3. 「パッケージ化されていない拡張機能を読み込む」で `dist/` を選ぶ
+4. ツールバーのアイコンを押すとサイドパネルが開く
+
+**Chrome 137 以降が必要。** `input()` の実装に JSPI を使うため、これより前のバージョンでは動かない（[ADR 0012](docs/ADR/0012-implement-stdin-as-terminal-with-jspi.md)）。
+
+外部と通信しない。Python の実行環境も含めてすべて拡張に同梱してある（[docs/store-listing.md](docs/store-listing.md)）。
 
 ## 現在のステータス
 
@@ -119,7 +133,7 @@ Chrome 拡張としてインストールし、ブラウザ内で Python コー�
 未着手のものは次のとおり。
 
 - `main.js` に自動テストが無い（下記）
-- 配布の形（パッケージ化、ストアへの登録）を決めていない
+- Chrome ウェブストアへ未登録。提出物は揃っているが、スクリーンショットとデベロッパー登録が残っている（[docs/store-listing.md](docs/store-listing.md)）
 
 ## 開発
 
@@ -128,6 +142,7 @@ npm install
 npm run build      # dist/ を作る
 npm run watch      # ソースの変更を監視して再ビルドする
 npm test           # ビルドしてから自動テストを走らせる
+npm run package    # 配布用 ZIP を release/ へ作る
 ```
 
 ### テストが見ている範囲

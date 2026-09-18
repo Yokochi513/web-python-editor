@@ -9,7 +9,8 @@
   "scripts": {
     "build": "node build.js",
     "watch": "node build.js --watch",
-    "test": "node build.js && node --experimental-wasm-jspi --test \"test/*.test.js\""
+    "test": "node build.js && node --experimental-wasm-jspi --test \"test/*.test.js\"",
+    "package": "node build.js && node package.js"
   },
   "repository": {
     "type": "git",
@@ -17,7 +18,7 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "bugs": {
     "url": "https://github.com/Yokochi513/web-python-editor/issues"
   },

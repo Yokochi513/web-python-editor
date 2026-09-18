@@ -262,6 +262,8 @@ web-python-editor/
 ├── manifest.json
 ├── package.json
 ├── build.js                    esbuild のビルド定義
+├── package.js                  配布用 ZIP の組み立て（[ADR 0032](ADR/0032-distribute-as-a-zip-built-in-repo.md)）
+├── LICENSE
 ├── src/
 │   ├── background/
 │   │   └── service-worker.js
@@ -279,8 +281,9 @@ web-python-editor/
 ├── docs/
 │   ├── design.md
 │   └── ADR/
-└── dist/                       ビルド成果物。拡張の読み込み対象
-    └── fonts/                  同梱するフォント（[ADR 0028](ADR/0028-bundle-fonts-used-by-the-design.md)）
+├── dist/                       ビルド成果物。拡張の読み込み対象
+│   └── fonts/                  同梱するフォント（[ADR 0028](ADR/0028-bundle-fonts-used-by-the-design.md)）
+└── release/                    配布用 ZIP。Git の対象外
 ```
 
 ## 7. ビルド
